@@ -10,12 +10,13 @@ Production: identical. The VM agent's IAM role limits it to its own vm_id.
 
 import os
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 
 import boto3
 from botocore.exceptions import ClientError
 
+from sandbox.contract.types import DISPOSITIONS
 from sandbox.registry.schema import (
     EVENTS_TABLE,
     JOBS_TABLE,
@@ -23,7 +24,7 @@ from sandbox.registry.schema import (
     REQUESTS_TABLE,
     VMS_TABLE,
 )
-from sandbox.timeutil import epoch_in, now_iso, to_iso
+from sandbox.timeutil import epoch_in, now, now_iso, to_iso
 
 LEASE_FIELDS = (
     "lease_id",
@@ -42,7 +43,7 @@ _POOL = {"#pool": "pool"}
 
 def _iso_in(seconds: int) -> str:
     """ISO timestamp `seconds` from now, for lease expiries."""
-    return to_iso(datetime.now(UTC) + timedelta(seconds=seconds))
+    return to_iso(now() + timedelta(seconds=seconds))
 
 
 def _clean(item):
@@ -83,7 +84,15 @@ class Registry:
     # ---- VM rows -----------------------------------------------------------
 
     def register_vm(self, vm_id, pool, provider_ref, agent_version, contract_majors, labels=None):
-        now = now_iso()
+        """Record a booting VM. Never disturbs a live lease.
+
+        A VM agent that re-registers — a restarted agent, a retried boot — must not be
+        able to reset a leased row back to an unleased `booting`, or the same VM could
+        be handed to a second workflow. So the fresh write is conditional, and an
+        existing live row gets an update that leaves `protected` and every lease field
+        exactly as the lease holder set them.
+        """
+        ts = now_iso()
         item = {
             "vm_id": vm_id,
             "pool": pool,
@@ -93,13 +102,42 @@ class Registry:
             "contract_majors": list(contract_majors),
             "labels": dict(labels or {}),
             "protected": False,
-            "created_at": now,
-            "last_heartbeat_at": now,
-            "last_transition_at": now,
+            "created_at": ts,
+            "last_heartbeat_at": ts,
+            "last_transition_at": ts,
             "reason": "boot",
         }
-        self.vms.put_item(Item=item)
-        return item
+        try:
+            self.vms.put_item(
+                Item=item,
+                ConditionExpression="attribute_not_exists(vm_id) OR #s IN (:terminated, :dead)",
+                ExpressionAttributeNames=_S,
+                ExpressionAttributeValues={":terminated": "terminated", ":dead": "dead"},
+            )
+            return item
+        except ClientError as e:
+            if not _is_condition_failure(e):
+                raise
+        self.vms.update_item(
+            Key={"vm_id": vm_id},
+            UpdateExpression=(
+                "SET #pool = :pool, provider_ref = :ref, agent_version = :ver, "
+                "contract_majors = :majors, labels = :labels, #s = :booting, "
+                "last_heartbeat_at = :ts, last_transition_at = :ts, reason = :reason"
+            ),
+            ExpressionAttributeNames={**_S, **_POOL},
+            ExpressionAttributeValues={
+                ":pool": pool,
+                ":ref": provider_ref,
+                ":ver": agent_version,
+                ":majors": list(contract_majors),
+                ":labels": dict(labels or {}),
+                ":booting": "booting",
+                ":ts": ts,
+                ":reason": "re-registered",
+            },
+        )
+        return self.get_vm(vm_id)
 
     def get_vm(self, vm_id):
         item = self.vms.get_item(Key={"vm_id": vm_id}).get("Item")
@@ -191,7 +229,7 @@ class Registry:
                 continue
             if any(row.get("labels", {}).get(k) != v for k, v in wanted.items()):
                 continue
-            now = now_iso()
+            ts = now_iso()
             try:
                 out = self.vms.update_item(
                     Key={"vm_id": row["vm_id"]},
@@ -207,7 +245,7 @@ class Registry:
                         ":leased": "leased",
                         ":idle": "idle",
                         ":true": True,
-                        ":now": now,
+                        ":now": ts,
                         ":reason": "acquired",
                         ":lease": lease_id,
                         ":req": request_id,
@@ -237,6 +275,8 @@ class Registry:
         return None
 
     def release(self, vm_id, lease_id, disposition) -> bool:
+        if disposition not in DISPOSITIONS:
+            raise ValueError(f"unknown disposition {disposition!r}, expected one of {DISPOSITIONS}")
         new_state = "recycling" if disposition == "recycle" else "terminating"
         try:
             self.vms.update_item(
@@ -317,10 +357,10 @@ class Registry:
     # ---- events -------------------------------------------------------------
 
     def emit(self, type, actor, message, vm_id="", details=None):
-        now = now_iso()
+        ts = now_iso()
         item = {
-            "day": now[:10],
-            "ts_ulid": f"{now}#{uuid.uuid4().hex[:8]}",
+            "day": ts[:10],
+            "ts_ulid": f"{ts}#{uuid.uuid4().hex[:8]}",
             "type": type,
             "actor": actor,
             "vm_id": vm_id,

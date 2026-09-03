@@ -2,6 +2,9 @@
 
 import time
 
+import pytest
+
+from sandbox.registry.client import LEASE_FIELDS
 from sandbox.registry.schema import STATES
 
 
@@ -47,9 +50,7 @@ def test_set_state_with_wrong_expectation_is_rejected(registry):
 
 def test_claim_takes_the_oldest_idle_vm_only_once(registry):
     _register(registry, "sbx-old")
-    # created_at comes from now_iso(), which is second-resolution, so the two rows
-    # need to land in different seconds for "oldest" to be a decidable question.
-    time.sleep(1.1)
+    time.sleep(0.01)
     _register(registry, "sbx-new")
     first = _claim(registry, "r1")
     second = _claim(registry, "r2")
@@ -60,6 +61,24 @@ def test_claim_takes_the_oldest_idle_vm_only_once(registry):
     assert registry.get_vm("sbx-old")["state"] == "leased"
     assert registry.get_vm("sbx-old")["protected"] is True
     assert registry.get_vm("sbx-old")["owner_workflow_id"] == "wf-r1"
+
+
+def test_re_registering_a_leased_vm_does_not_free_it(registry):
+    _register(registry, "sbx-a")
+    leased = _claim(registry, "r1")
+    registry.register_vm(
+        vm_id="sbx-a",
+        pool="demo",
+        provider_ref="sbx-a",
+        agent_version="test-2",
+        contract_majors=[1],
+        labels={},
+    )
+    after = registry.get_vm("sbx-a")
+    assert after["lease_id"] == leased["lease_id"]
+    assert after["protected"] is True
+    assert after["agent_version"] == "test-2"
+    assert _claim(registry, "r2") is None
 
 
 def test_claim_respects_labels_and_contract_major(registry):
@@ -85,8 +104,15 @@ def test_release_is_idempotent_and_clears_lease_fields(registry):
     after = registry.get_vm("sbx-a")
     assert after["state"] == "recycling"
     assert after["protected"] is False
-    assert "lease_id" not in after
+    assert not any(f in after for f in LEASE_FIELDS)
     assert registry.find_lease_by_request("r1") is None
+
+
+def test_release_rejects_an_unknown_disposition(registry):
+    _register(registry, "sbx-a")
+    row = _claim(registry, "r1")
+    with pytest.raises(ValueError):
+        registry.release("sbx-a", row["lease_id"], "obliterate")
 
 
 def test_heartbeat_returns_state_and_none_when_row_is_gone(registry):
@@ -99,8 +125,9 @@ def test_heartbeat_returns_state_and_none_when_row_is_gone(registry):
 def test_touch_lease_extends_expiry(registry):
     _register(registry, "sbx-a")
     row = _claim(registry, "r1")
+    time.sleep(0.01)
     registry.touch_lease("sbx-a")
-    assert registry.get_vm("sbx-a")["lease_expires_at"] >= row["lease_expires_at"]
+    assert registry.get_vm("sbx-a")["lease_expires_at"] > row["lease_expires_at"]
 
 
 def test_jobs_events_and_requests(registry):
