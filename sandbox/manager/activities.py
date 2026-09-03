@@ -5,8 +5,9 @@ Why: acquire is idempotent on the caller's request_id, so a workflow that
 crashes between claiming and recording finds its lease again. It never waits;
 no capacity is a non-retryable NoCapacity that the client turns into a sleep
 loop, and the pending request is recorded so it counts toward scale-out.
-Release is idempotent on the lease id and only flips the row; the VM finishes
-the recycle itself.
+Release is idempotent on the lease id. A recycle only flips the row and the VM
+finishes the wipe itself; a destroy terminates through the provider first, so a
+failed terminate retries with the lease still held.
 Production: identical. These run as sync activities in a thread pool because
 boto3 is blocking.
 """
@@ -17,7 +18,7 @@ from temporalio import activity
 
 from sandbox.contract import names
 from sandbox.contract.errors import Incompatible, NoCapacity
-from sandbox.contract.types import ReleaseRequest, SandboxLease, SandboxSpec
+from sandbox.contract.types import DISPOSITIONS, ReleaseRequest, SandboxLease, SandboxSpec
 from sandbox.contract.version import CONTRACT_VERSION, SUPPORTED_MAJORS
 from sandbox.registry.client import Registry
 
@@ -77,15 +78,22 @@ class ManagerActivities:
 
     @activity.defn(name=names.RELEASE)
     def release(self, req: ReleaseRequest) -> None:
-        changed = self.registry.release(req.vm_id, req.lease_id, req.disposition)
-        if not changed:
-            return
+        if req.disposition not in DISPOSITIONS:
+            raise Incompatible(f"unknown disposition {req.disposition!r}")
         if req.disposition == "destroy":
+            # Terminate before releasing. The lease is what makes this activity
+            # retryable: if the provider call fails with the row already unleased,
+            # a retry finds nothing to do and the VM is stranded in `terminating`.
             row = self.registry.get_vm(req.vm_id)
-            ref = (row or {}).get("provider_ref", req.vm_id)
+            if row is None or row.get("lease_id") != req.lease_id:
+                return
             if self.provider is not None:
-                self.provider.terminate(ref)
+                self.provider.terminate(row.get("provider_ref", req.vm_id))
+            self.registry.release(req.vm_id, req.lease_id, "destroy")
             self.registry.set_state(req.vm_id, "terminated", reason="destroyed")
+        else:
+            if not self.registry.release(req.vm_id, req.lease_id, req.disposition):
+                return
         self.registry.emit(
             "release",
             "manager",

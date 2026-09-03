@@ -16,6 +16,20 @@ class FakeProvider:
         self.terminated.append(ref)
 
 
+class FlakyProvider(FakeProvider):
+    """Fails the first terminate, succeeds after — a provider blip mid-destroy."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def terminate(self, ref):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("provider unavailable")
+        super().terminate(ref)
+
+
 def _idle(registry, vm_id):
     registry.register_vm(vm_id, "demo", vm_id, "test", [1], {})
     assert registry.set_state(vm_id, "idle", expect="booting")
@@ -76,3 +90,28 @@ async def test_release_destroy_terminates_through_the_provider(registry):
     )
     assert provider.terminated == ["sbx-a"]
     assert registry.get_vm("sbx-a")["state"] == "terminated"
+
+
+async def test_release_destroy_keeps_the_lease_when_terminate_fails(registry):
+    _idle(registry, "sbx-a")
+    provider = FlakyProvider()
+    acts = ManagerActivities(registry, provider)
+    env = ActivityEnvironment()
+    lease = env.run(acts.acquire, SandboxSpec(pool="demo", request_id="r1"))
+    req = ReleaseRequest(vm_id=lease.vm_id, lease_id=lease.lease_id, disposition="destroy")
+    with pytest.raises(RuntimeError):
+        env.run(acts.release, req)
+    row = registry.get_vm("sbx-a")
+    assert row["state"] == "leased" and row["lease_id"] == lease.lease_id
+    env.run(acts.release, req)
+    assert provider.terminated == ["sbx-a"]
+    assert registry.get_vm("sbx-a")["state"] == "terminated"
+
+
+async def test_release_rejects_an_unknown_disposition(registry):
+    acts = ManagerActivities(registry)
+    with pytest.raises(ApplicationError) as err:
+        ActivityEnvironment().run(
+            acts.release, ReleaseRequest(vm_id="sbx-a", lease_id="l1", disposition="bogus")
+        )
+    assert err.value.type == "Incompatible"
