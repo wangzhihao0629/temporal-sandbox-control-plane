@@ -9,7 +9,10 @@ record when the command ends, so completion is visible even if nobody was
 watching. The command runs in its own session so cancel can kill the whole
 group.
 Production: identical. `run_as_user` is the unprivileged agent user and sudo is
-the privilege boundary; the same code runs the tests as the current user.
+the privilege boundary, invoked with `--preserve-env` so the job's environment
+crosses in the process environment rather than on the command line, where
+`/proc/<pid>/cmdline` would expose every resolved secret to any local reader;
+the same code runs the tests as the current user.
 """
 
 import json
@@ -22,12 +25,15 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from sandbox.contract.errors import Incompatible
 from sandbox.contract.types import ExecJob, ExecSpec
 from sandbox.timeutil import now_iso
 
 # "$0" is the job directory. The command's exit code is written atomically so a
 # reader never sees an empty exit file.
 _WRAPPER = '"$@"; rc=$?; printf "%s" "$rc" > "$0/exit.tmp"; mv "$0/exit.tmp" "$0/exit"; exit "$rc"'
+
+_STREAMS = ("stdout", "stderr")
 
 
 @dataclass(frozen=True)
@@ -83,6 +89,8 @@ class JobStore:
         return self.root / _safe(job_id)
 
     def log_path(self, job_id: str, stream: str) -> Path:
+        if stream not in _STREAMS:
+            raise ValueError(f"unknown stream {stream!r}; expected one of {_STREAMS}")
         return self.job_dir(job_id) / f"{stream}.log"
 
     def exists(self, job_id: str) -> bool:
@@ -95,6 +103,18 @@ class JobStore:
         path = self.job_dir(job_id) / "meta.json"
         return json.loads(path.read_text()) if path.exists() else None
 
+    def _await_meta(self, job_id: str, timeout: float = 2.0) -> dict | None:
+        # A concurrent starter may be between mkdir and meta.json. Give it a
+        # window before concluding the directory is a crash leftover.
+        deadline = time.time() + timeout
+        while True:
+            meta = self._meta(job_id)
+            if meta is not None:
+                return meta
+            if time.time() >= deadline:
+                return None
+            time.sleep(0.05)
+
     def pgid(self, job_id: str) -> int:
         meta = self._meta(job_id)
         if meta is None:
@@ -106,12 +126,22 @@ class JobStore:
     def start(self, spec: ExecSpec, env: dict[str, str]) -> ExecJob:
         d = self.job_dir(spec.job_id)
         try:
-            d.mkdir(parents=True, exist_ok=False)
+            d.mkdir(parents=True, exist_ok=False, mode=0o700)
         except FileExistsError:
-            meta = self._meta(spec.job_id)
-            if meta is None:
-                raise
-            return ExecJob(job_id=spec.job_id, vm_id=self.vm_id, started_at=meta["started_at_iso"])
+            meta = self._await_meta(spec.job_id)
+            if meta is not None:
+                recorded = meta.get("job_id", spec.job_id)
+                if recorded != spec.job_id:
+                    raise Incompatible(
+                        f"job id {spec.job_id!r} collides with {recorded!r} on disk"
+                    ) from None
+                return ExecJob(
+                    job_id=spec.job_id, vm_id=self.vm_id, started_at=meta["started_at_iso"]
+                )
+            # No meta after the window: a start died between mkdir and meta.json,
+            # so this is a leftover directory and not a job anyone can wait on.
+            shutil.rmtree(d, ignore_errors=True)
+            d.mkdir(parents=True, exist_ok=False, mode=0o700)
 
         (d / "spec.json").write_text(json.dumps(asdict(spec)))
         argv = self._wrap(spec, env, d)
@@ -131,6 +161,7 @@ class JobStore:
             raise
         started = time.time()
         meta = {
+            "job_id": spec.job_id,
             "pid": proc.pid,
             "pgid": proc.pid,
             "started_at": started,
@@ -143,24 +174,24 @@ class JobStore:
     def _wrap(self, spec: ExecSpec, env: dict[str, str], d: Path) -> list[str]:
         inner = list(spec.argv)
         if self.run_as_user:
+            # The values stay out of argv: sudo carries them over from our own
+            # environment, so nothing sensitive lands in /proc/<pid>/cmdline.
             inner = [
                 "sudo",
                 "-n",
                 "-u",
                 self.run_as_user,
+                f"--preserve-env={','.join(sorted(env))}",
                 "--",
-                "/usr/bin/env",
-                "-i",
-                *[f"{k}={v}" for k, v in env.items()],
                 *inner,
             ]
         return ["sh", "-c", _WRAPPER, str(d), *inner]
 
     def _popen_env(self, env: dict[str, str]) -> dict[str, str]:
-        # The wrapper shell and sudo need a PATH; the job's own environment is
-        # rebuilt from `env -i` when sudo is in play, or is `env` itself otherwise.
-        base = {"PATH": env.get("PATH") or os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")}
-        return base if self.run_as_user else {**base, **env}
+        # The wrapper shell and sudo need a PATH of their own; sudo's secure_path
+        # resets PATH for the target command, which is what we want there.
+        path = env.get("PATH") or os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
+        return {**env, "PATH": path}
 
     def status(self, job_id: str) -> JobStatus:
         meta = self._meta(job_id)
@@ -180,13 +211,27 @@ class JobStore:
             )
         if _pid_alive(int(meta["pid"])):
             return JobStatus(job_id, True, None, meta["started_at"], None, reason, False)
-        return JobStatus(job_id, False, None, meta["started_at"], time.time(), reason, True)
+        return JobStatus(job_id, False, None, meta["started_at"], self._mark_lost(d), reason, True)
+
+    def _mark_lost(self, d: Path) -> float:
+        # A lost job has no exit file to date it, so the first reader to notice
+        # writes the marker and every later reader agrees on when it ended.
+        marker = d / "lost"
+        if not marker.exists():
+            tmp = d / "lost.tmp"
+            tmp.write_text(now_iso())
+            os.replace(tmp, marker)
+        return marker.stat().st_mtime
 
     def running_job_ids(self) -> list[str]:
         ids = []
         for child in self.root.iterdir():
-            if (child / "meta.json").exists() and self.status(child.name).running:
-                ids.append(child.name)
+            meta_path = child / "meta.json"
+            if not meta_path.exists():
+                continue
+            job_id = json.loads(meta_path.read_text()).get("job_id", child.name)
+            if self.status(job_id).running:
+                ids.append(job_id)
         return ids
 
     def cancel(self, job_id: str, grace_seconds: float, reason: str = "cancelled") -> None:
@@ -206,7 +251,8 @@ class JobStore:
                 time.sleep(0.05)
         if not (d / "exit").exists():
             # The wrapper died with the group and never recorded an exit code.
-            (d / "exit").write_text("-1")
+            (d / "exit.tmp").write_text("-1")
+            os.replace(d / "exit.tmp", d / "exit")
 
     # ---- output --------------------------------------------------------------
 
@@ -224,13 +270,20 @@ class JobStore:
         removed = 0
         cutoff = time.time() - older_than_seconds
         for child in list(self.root.iterdir()):
-            if not (child / "meta.json").exists():
+            meta_path = child / "meta.json"
+            if not meta_path.exists():
+                # A crash leftover: nothing can wait on it, so age it out by the
+                # directory's own mtime.
+                if child.stat().st_mtime <= cutoff:
+                    shutil.rmtree(child, ignore_errors=True)
+                    removed += 1
                 continue
-            st = self.status(child.name)
+            job_id = json.loads(meta_path.read_text()).get("job_id", child.name)
+            st = self.status(job_id)
             if st.running:
                 continue
             if (st.ended_at or 0) <= cutoff:
                 shutil.rmtree(child, ignore_errors=True)
-                self._procs.pop(child.name, None)
+                self._procs.pop(job_id, None)
                 removed += 1
         return removed

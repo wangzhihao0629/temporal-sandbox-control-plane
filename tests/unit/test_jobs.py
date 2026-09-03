@@ -6,8 +6,9 @@ import time
 
 import pytest
 
+from sandbox.contract.errors import Incompatible
 from sandbox.contract.types import ExecSpec
-from sandbox.vm_agent.jobs import JobStore
+from sandbox.vm_agent.jobs import _WRAPPER, JobStore
 
 
 @pytest.fixture
@@ -98,3 +99,74 @@ def test_prune_removes_finished_old_jobs(store, tmp_path):
     _wait_done(store, "j6")
     store.prune(older_than_seconds=0)
     assert store.exists("j6") is False
+
+
+def test_prune_removes_lost_jobs(store, tmp_path):
+    store.start(_spec(tmp_path, "j7", ["sleep", "30"]), _env())
+    time.sleep(0.2)
+    os.killpg(store.pgid("j7"), signal.SIGKILL)
+    deadline = time.time() + 5
+    while time.time() < deadline and store.status("j7").running:
+        time.sleep(0.05)
+    assert store.status("j7").lost is True
+    time.sleep(0.05)
+    assert store.prune(older_than_seconds=0) == 1
+    assert store.exists("j7") is False
+
+
+def test_prune_removes_directories_with_no_meta(store):
+    leftover = store.root / "half-started"
+    leftover.mkdir()
+    assert store.prune(older_than_seconds=0) == 1
+    assert leftover.exists() is False
+
+
+def test_start_recovers_from_a_directory_left_by_a_crashed_start(store, tmp_path):
+    d = store.job_dir("j8")
+    d.mkdir(parents=True)
+    (d / "spec.json").write_text("{}")
+    store.start(_spec(tmp_path, "j8", ["sh", "-c", "echo recovered"]), _env())
+    _wait_done(store, "j8")
+    assert store.read_tail("j8", "stdout") == "recovered\n"
+
+
+def test_wrap_hands_the_environment_to_sudo_not_to_argv(tmp_path):
+    store = JobStore(tmp_path / "jobs", vm_id="sbx-x", run_as_user="agent")
+    spec = _spec(tmp_path, "j9", ["claude", "-p", "do the thing"])
+    env = {"PATH": "/usr/bin", "HOME": "/home/agent", "GITHUB_TOKEN": "t"}
+    d = store.job_dir("j9")
+    assert store._wrap(spec, env, d) == [
+        "sh",
+        "-c",
+        _WRAPPER,
+        str(d),
+        "sudo",
+        "-n",
+        "-u",
+        "agent",
+        "--preserve-env=GITHUB_TOKEN,HOME,PATH",
+        "--",
+        *spec.argv,
+    ]
+    assert store._popen_env(env) == {
+        "PATH": "/usr/bin",
+        "HOME": "/home/agent",
+        "GITHUB_TOKEN": "t",
+    }
+
+
+def test_a_job_id_that_collides_on_disk_is_refused(store, tmp_path):
+    store.start(_spec(tmp_path, "a.b", ["sh", "-c", "echo one"]), _env())
+    with pytest.raises(Incompatible) as err:
+        store.start(_spec(tmp_path, "a-b", ["sh", "-c", "echo two"]), _env())
+    assert err.value.type == "Incompatible"
+    st = _wait_done(store, "a.b")
+    assert st.exit_code == 0
+    assert store.running_job_ids() == []
+
+
+def test_unknown_streams_are_refused(store):
+    with pytest.raises(ValueError):
+        store.log_path("j1", "stdlog")
+    with pytest.raises(ValueError):
+        store.read_tail("j1", "stdlog")
