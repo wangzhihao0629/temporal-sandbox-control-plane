@@ -19,7 +19,6 @@ from sandbox.contract.version import SUPPORTED_MAJORS
 from sandbox.objectstore import ObjectStore
 from sandbox.registry.client import Registry
 from sandbox.vm_agent.activities import VmActivities
-from sandbox.vm_agent.artifacts import ArtifactCache
 from sandbox.vm_agent.config import AgentConfig
 from sandbox.vm_agent.drain import DrainState
 from sandbox.vm_agent.heartbeat import HeartbeatLoop
@@ -46,6 +45,8 @@ class AgentRuntime:
         self._worker: Worker | None = None
         self._worker_task: asyncio.Task | None = None
         self._heartbeat_task: asyncio.Task | None = None
+        self._drain_task: asyncio.Task | None = None
+        self._stopped = False
 
     def _new_worker(self) -> Worker:
         return Worker(
@@ -68,9 +69,8 @@ class AgentRuntime:
             list(SUPPORTED_MAJORS),
             self.cfg.labels,
         )
-        cache = ArtifactCache(self.cfg.artifacts_dir, self.store)
         for uri, digest in self.cfg.prefetch:
-            await asyncio.to_thread(cache.ensure, uri, digest)
+            await asyncio.to_thread(self.activities.artifacts.ensure, uri, digest)
         self._worker = self._new_worker()
         self._worker_task = asyncio.create_task(self._worker.run())
         await asyncio.to_thread(
@@ -89,6 +89,17 @@ class AgentRuntime:
         self._worker = self._new_worker()
         self._worker_task = asyncio.create_task(self._worker.run())
 
+    def request_drain(self) -> asyncio.Task:
+        """Start a drain in the background, or hand back the one already running.
+
+        A signal handler cannot await, and `drain` ends by stopping the runtime,
+        which is what wakes `run_until_stopped`. Holding the task here lets that
+        loop wait for the drain it caused instead of racing it to the exit.
+        """
+        if self._drain_task is None:
+            self._drain_task = asyncio.create_task(self.drain())
+        return self._drain_task
+
     async def drain(self) -> None:
         self.drain_state.draining = True
         await asyncio.to_thread(
@@ -100,6 +111,9 @@ class AgentRuntime:
         await self.stop(final_state="terminated")
 
     async def stop(self, final_state: str = "terminated") -> None:
+        if self._stopped:
+            return
+        self._stopped = True
         self.stop_event.set()
         if self._worker is not None:
             await self._worker.shutdown()
@@ -114,5 +128,7 @@ class AgentRuntime:
     async def run_until_stopped(self) -> None:
         await self.start()
         await self.stop_event.wait()
-        if not self.drain_state.draining:
+        if self._drain_task is not None:
+            await self._drain_task
+        else:
             await self.stop()

@@ -9,10 +9,13 @@ Production: identical, at 30 seconds instead of 5.
 """
 
 import asyncio
+import logging
 from collections.abc import Callable
 
 from sandbox.registry.client import Registry
 from sandbox.vm_agent.config import AgentConfig
+
+logger = logging.getLogger(__name__)
 
 
 class HeartbeatLoop:
@@ -50,9 +53,16 @@ class HeartbeatLoop:
 
     async def run(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
-            state = await self.tick()
-            if state is None:
-                return
+            # A throttled or briefly unreachable registry must not kill the loop:
+            # the VM would then stop heartbeating and the reconciler would declare
+            # a healthy machine dead. Only a missing row ends it.
+            try:
+                state = await self.tick()
+            except Exception:
+                logger.warning("heartbeat tick failed for %s", self.cfg.vm_id, exc_info=True)
+            else:
+                if state is None:
+                    return
             try:
                 await asyncio.wait_for(stop.wait(), timeout=self.cfg.heartbeat_seconds)
             except TimeoutError:

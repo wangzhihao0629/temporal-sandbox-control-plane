@@ -45,6 +45,12 @@ class ArtifactCache:
         try:
             staging.rename(target)
         except OSError:
+            # Another process almost certainly won the race and put its own
+            # extraction there. Take theirs if it is finished; otherwise the
+            # rename failed for a real reason and nothing here is usable.
             shutil.rmtree(staging, ignore_errors=True)
+            if (target / ".complete").exists():
+                return target
+            raise
         (target / ".complete").touch()
         return target

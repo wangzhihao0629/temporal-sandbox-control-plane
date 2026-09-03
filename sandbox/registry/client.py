@@ -58,6 +58,22 @@ def _clean(item):
     return item
 
 
+def _to_dynamo(value):
+    """Coerce a value into what DynamoDB accepts, which excludes floats.
+
+    Callers deal in Python numbers; only this module should have to know that a
+    duration or a ratio has to cross as a Decimal. `_clean` is the inverse on
+    the way out.
+    """
+    if isinstance(value, float):
+        return Decimal(str(value))
+    if isinstance(value, dict):
+        return {k: _to_dynamo(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_to_dynamo(v) for v in value]
+    return value
+
+
 def _is_condition_failure(err: ClientError) -> bool:
     return err.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException"
 
@@ -326,11 +342,12 @@ class Registry:
     # ---- jobs ---------------------------------------------------------------
 
     def put_job(self, vm_id, job_id, **fields):
-        item = {"vm_id": vm_id, "job_id": job_id, "updated_at": now_iso(), **fields}
+        item = {"vm_id": vm_id, "job_id": job_id, "updated_at": now_iso(), **_to_dynamo(fields)}
         self.jobs.put_item(Item=item)
         return item
 
     def update_job(self, vm_id, job_id, **fields):
+        fields = _to_dynamo(fields)
         fields["updated_at"] = now_iso()
         names = {f"#f{i}": k for i, k in enumerate(fields)}
         values = {f":v{i}": v for i, v in enumerate(fields.values())}
@@ -365,7 +382,7 @@ class Registry:
             "actor": actor,
             "vm_id": vm_id,
             "message": message,
-            "details": details or {},
+            "details": _to_dynamo(details or {}),
             "ttl": epoch_in(7 * 24 * 3600),
         }
         self.events.put_item(Item=item)

@@ -13,7 +13,6 @@ import os
 import shutil
 import subprocess
 import time
-from decimal import Decimal
 
 from temporalio import activity
 
@@ -107,14 +106,20 @@ class VmActivities:
                 "SANDBOX_WORKSPACE_ROOT": str(self.cfg.workspace_root),
             }
         )
-        # The VM's own object-store identity, never the caller's. In production
-        # this is the instance's narrow role; locally it is the MinIO user.
+        env.update(validate_env(spec.env))
+        # The VM's own object-store identity, never the caller's, and applied
+        # after the caller's env so a request cannot redirect the VM at another
+        # endpoint. In production this is the instance's narrow role; locally it
+        # is the MinIO user.
         for key in _VM_IDENTITY_KEYS:
             if key in os.environ:
                 env[key] = os.environ[key]
-        env.update(validate_env(spec.env))
         env.update(resolve_secrets(spec.secrets, self.cfg.secrets_dir))
         return env
+
+    async def _touch(self) -> None:
+        """Keep the lease alive; a no-op on a VM nobody has leased."""
+        await asyncio.to_thread(self.registry.touch_lease, self.cfg.vm_id)
 
     def _mkdir_cwd(self, cwd) -> None:
         if self.cfg.run_as_user:
@@ -173,7 +178,7 @@ class VmActivities:
             started_at=job.started_at,
             log_uri=spec.log_uri,
         )
-        await asyncio.to_thread(self.registry.touch_lease, self.cfg.vm_id)
+        await self._touch()
         return job
 
     @activity.defn(name=names.EXEC_WAIT)
@@ -206,10 +211,19 @@ class VmActivities:
                             **sizes,
                         }
                     )
-                    await asyncio.to_thread(self.registry.touch_lease, self.cfg.vm_id)
+                    await self._touch()
                     last_heartbeat = now
                 await asyncio.sleep(_POLL_EVERY)
         except asyncio.CancelledError:
+            if self.drain.draining:
+                # A drain stops the worker, so the cancellation usually arrives
+                # before the loop's own drain check fires. The orchestrator has
+                # to hear that the host is going away — that it should re-dispatch
+                # elsewhere — and not that its job was cancelled or that the
+                # worker will reattach to it.
+                await asyncio.to_thread(self.jobs.cancel, req.job_id, 10, "cancelled")
+                await asyncio.to_thread(self._sync_logs, req.job_id, spec.log_uri)
+                raise HostDraining() from None
             if activity.is_worker_shutdown():
                 # Leave the job running; the retried wait will reattach to it.
                 raise
@@ -225,32 +239,36 @@ class VmActivities:
             status=result.status,
             exit_code=result.exit_code,
             ended_at=now_iso(),
-            # DynamoDB has no float type, so the duration crosses as a Decimal.
-            duration_seconds=Decimal(str(round(result.duration_seconds, 3))),
+            duration_seconds=round(result.duration_seconds, 3),
         )
         return result
 
     @activity.defn(name=names.EXEC_CANCEL)
     async def exec_cancel(self, req: CancelRequest) -> None:
+        await self._touch()
         await asyncio.to_thread(self.jobs.cancel, req.job_id, req.grace_seconds, "cancelled")
 
     @activity.defn(name=names.PUT_FILE)
     async def put_file(self, req: PutFileRequest) -> FileStat:
         path = validate_path_under(req.path, self.cfg.workspace_root)
+        await self._touch()
         return await asyncio.to_thread(files.put_file, self.store, req.src_uri, path)
 
     @activity.defn(name=names.GET_FILE)
     async def get_file(self, req: GetFileRequest) -> FileStat:
         path = validate_path_under(req.path, self.cfg.workspace_root)
+        await self._touch()
         return await asyncio.to_thread(files.get_file, self.store, path, req.dst_uri)
 
     @activity.defn(name=names.ENSURE_ARTIFACT)
     async def ensure_artifact(self, req: ArtifactRequest) -> ArtifactRef:
+        await self._touch()
         path = await asyncio.to_thread(self.artifacts.ensure, req.uri, req.sha256)
         return ArtifactRef(uri=req.uri, sha256=req.sha256, path=str(path))
 
     @activity.defn(name=names.DESCRIBE)
     async def describe(self) -> VmInfo:
+        await self._touch()
         usage = shutil.disk_usage(self.cfg.workspace_root)
         return VmInfo(
             vm_id=self.cfg.vm_id,

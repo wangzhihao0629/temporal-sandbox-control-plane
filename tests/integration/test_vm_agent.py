@@ -1,14 +1,15 @@
-"""The VM agent end to end: boot, exec, files, artifacts, describe, wipe, drain."""
+"""The VM agent end to end: boot, exec, files, artifacts, describe, wipe, cancel, drain."""
 
 import asyncio
 import hashlib
 import io
 import tarfile
+import time
 import uuid
 
 import pytest
 from temporalio.client import WorkflowFailureError
-from temporalio.exceptions import ActivityError, ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError, CancelledError
 from temporalio.worker import Worker
 
 from tests.integration.vmhost import InProcessVm
@@ -108,7 +109,13 @@ async def test_exec_times_out(env, aws, vm, orchestrator):
     assert result.status == "timed_out" and result.exit_code in (None, -1)
 
 
-async def test_exec_rejects_credential_env_and_bad_cwd(env, aws, vm, orchestrator):
+def _assert_incompatible(err: pytest.ExceptionInfo) -> None:
+    assert isinstance(err.value.cause, ActivityError)
+    assert isinstance(err.value.cause.cause, ApplicationError)
+    assert err.value.cause.cause.type == "Incompatible"
+
+
+async def test_exec_rejects_credential_env_and_bad_cwd(env, aws, vm, orchestrator, tmp_path):
     with pytest.raises(WorkflowFailureError) as err:
         await _run(
             env,
@@ -121,9 +128,18 @@ async def test_exec_rejects_credential_env_and_bad_cwd(env, aws, vm, orchestrato
                 env={"MY_TOKEN": "x"},
             ),
         )
-    assert isinstance(err.value.cause, ActivityError)
-    assert isinstance(err.value.cause.cause, ApplicationError)
-    assert err.value.cause.cause.type == "Incompatible"
+    _assert_incompatible(err)
+
+    # tmp_path is the parent of this VM's workspace root, so it is a real
+    # directory the agent could write to and must still refuse.
+    with pytest.raises(WorkflowFailureError) as err:
+        await _run(
+            env,
+            orchestrator,
+            RunCommandWorkflow,
+            RunCommandParams(task_queue=vm.task_queue, cwd=str(tmp_path), argv=["true"]),
+        )
+    _assert_incompatible(err)
 
 
 async def test_file_round_trip(env, aws, vm, orchestrator):
@@ -226,6 +242,10 @@ async def test_drain_fails_the_running_wait_with_host_draining(env, aws, vm, orc
             argv=["sleep", "30"],
             wait_start_to_close_seconds=20,
             wait_heartbeat_seconds=10,
+            # One attempt, so the failure the workflow reports is the drain's
+            # own and not a schedule-to-start timeout on a queue whose worker
+            # has since gone away.
+            wait_max_attempts=1,
         ),
         id=f"drain-{uuid.uuid4().hex[:8]}",
         task_queue=orchestrator,
@@ -236,5 +256,36 @@ async def test_drain_fails_the_running_wait_with_host_draining(env, aws, vm, orc
         await handle.result()
     cause = err.value.cause
     assert isinstance(cause, ActivityError)
-    assert isinstance(cause.cause, (ApplicationError, Exception))
+    assert isinstance(cause.cause, ApplicationError)
+    assert cause.cause.type == "HostDraining"
     assert registry.get_vm(vm.vm_id)["state"] == "terminated"
+
+
+async def test_cancelling_the_workflow_kills_the_job(env, aws, vm, orchestrator):
+    registry, _ = aws
+    handle = await env.client.start_workflow(
+        RunCommandWorkflow.run,
+        RunCommandParams(
+            task_queue=vm.task_queue,
+            cwd=_ws(vm),
+            argv=["sleep", "30"],
+            wait_heartbeat_seconds=10,
+        ),
+        id=f"cancel-{uuid.uuid4().hex[:8]}",
+        task_queue=orchestrator,
+    )
+    await asyncio.sleep(2)
+    await handle.cancel()
+    with pytest.raises(WorkflowFailureError) as err:
+        await handle.result()
+    assert isinstance(err.value.cause, CancelledError)
+
+    jobs = vm.runtime.jobs
+    # The activity learns of the cancellation on its next heartbeat, so the kill
+    # trails the workflow's own failure.
+    deadline = time.monotonic() + 30
+    while jobs.running_job_ids() and time.monotonic() < deadline:
+        await asyncio.sleep(0.25)
+    assert jobs.running_job_ids() == []
+    job_id = registry.list_jobs(vm.vm_id)[0]["job_id"]
+    assert jobs.status(job_id).reason == "cancelled"

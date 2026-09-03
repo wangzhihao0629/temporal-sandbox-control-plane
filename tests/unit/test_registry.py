@@ -146,3 +146,14 @@ def test_jobs_events_and_requests(registry):
     assert registry.pending_count("demo") == 1
     registry.fulfill_request("r9")
     assert registry.pending_count("demo") == 0
+
+
+def test_job_floats_round_trip_as_floats(registry):
+    """DynamoDB has no float type, so the client coerces them on the way in."""
+    registry.put_job("sbx-a", "j2", status="running", duration_seconds=0.0)
+    registry.update_job("sbx-a", "j2", status="exited", duration_seconds=2.125)
+    registry.emit("exec", "vm-agent", "job done", vm_id="sbx-a", details={"seconds": 2.125})
+
+    job = registry.list_jobs("sbx-a")[0]
+    assert job["duration_seconds"] == 2.125 and isinstance(job["duration_seconds"], float)
+    assert registry.recent_events(limit=1)[0]["details"] == {"seconds": 2.125}

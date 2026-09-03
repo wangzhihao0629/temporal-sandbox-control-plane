@@ -28,7 +28,7 @@ async def main() -> None:
     runtime = AgentRuntime(cfg, client, Registry.from_env(), ObjectStore.from_env())
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, lambda: asyncio.ensure_future(runtime.drain()))
+        loop.add_signal_handler(sig, runtime.request_drain)
     logging.getLogger(__name__).info(
         "vm agent %s starting on %s", cfg.vm_id, cfg.temporal_address
     )
