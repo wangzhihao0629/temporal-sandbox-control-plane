@@ -26,3 +26,17 @@ def s3_store():
         for bucket in BUCKETS:
             store.ensure_bucket(bucket)
         yield store
+
+
+@pytest.fixture
+def registry():
+    import boto3
+    from moto import mock_aws
+
+    from sandbox.registry.client import Registry
+    from sandbox.registry.schema import create_tables
+
+    with mock_aws():
+        resource = boto3.resource("dynamodb", region_name="us-east-1")
+        create_tables(resource)
+        yield Registry(resource)
