@@ -26,6 +26,26 @@ def test_validate_env_rejects_credential_shaped_keys(key):
     assert err.value.type == "Incompatible"
 
 
+@pytest.mark.parametrize(
+    "key", ["LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "BASH_ENV", "ENV"]
+)
+def test_validate_env_rejects_keys_that_steer_the_privileged_wrapper(key):
+    # This environment is handed to /bin/sh and to sudo before the job's own
+    # code runs, so a loader or startup-file hook is code execution as root.
+    with pytest.raises(ApplicationError) as err:
+        validation.validate_env({key: "/tmp/evil.so"})
+    assert err.value.type == "Incompatible"
+
+
+@pytest.mark.parametrize("key", ["A=B", "WITH,COMMA", "1STARTS_WITH_DIGIT", "has-dash", "", "a b"])
+def test_validate_env_rejects_keys_that_are_not_environment_variable_names(key):
+    # `=` would split into a second variable inside Popen's environment and `,`
+    # would forge an extra name in sudo's --preserve-env list.
+    with pytest.raises(ApplicationError) as err:
+        validation.validate_env({key: "x"})
+    assert err.value.type == "Incompatible"
+
+
 def test_validate_env_passes_ordinary_keys():
     assert validation.validate_env({"PROMPT": "hi", "TURN_SECONDS": "3"}) == {
         "PROMPT": "hi",

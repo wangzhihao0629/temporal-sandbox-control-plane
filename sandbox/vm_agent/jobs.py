@@ -12,7 +12,10 @@ Production: identical. `run_as_user` is the unprivileged agent user and sudo is
 the privilege boundary, invoked with `--preserve-env` so the job's environment
 crosses in the process environment rather than on the command line, where
 `/proc/<pid>/cmdline` would expose every resolved secret to any local reader;
-the same code runs the tests as the current user.
+the same code runs the tests as the current user. That boundary cuts both ways:
+the worker cannot signal what it launched through sudo, so every kill goes back
+through sudo as well, and `cancel` refuses to record an exit code while
+anything in the group is still alive.
 """
 
 import json
@@ -34,6 +37,14 @@ from sandbox.timeutil import now_iso
 _WRAPPER = '"$@"; rc=$?; printf "%s" "$rc" > "$0/exit.tmp"; mv "$0/exit.tmp" "$0/exit"; exit "$rc"'
 
 _STREAMS = ("stdout", "stderr")
+
+# Resolved from the image, not from PATH: see _wrap and _popen_env.
+_SH = "/bin/sh"
+_SUDO = "/usr/bin/sudo"
+_DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# How long a SIGKILLed group gets to disappear before cancel calls it a leak.
+_KILL_GRACE_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -167,7 +178,10 @@ class JobStore:
             "started_at": started,
             "started_at_iso": now_iso(),
         }
-        (d / "meta.json").write_text(json.dumps(meta))
+        # Atomically: _await_meta treats a directory without meta.json as a
+        # crash leftover and deletes it, so a half-written file must never exist.
+        (d / "meta.json.tmp").write_text(json.dumps(meta))
+        os.replace(d / "meta.json.tmp", d / "meta.json")
         self._procs[spec.job_id] = proc
         return ExecJob(job_id=spec.job_id, vm_id=self.vm_id, started_at=meta["started_at_iso"])
 
@@ -176,8 +190,11 @@ class JobStore:
         if self.run_as_user:
             # The values stay out of argv: sudo carries them over from our own
             # environment, so nothing sensitive lands in /proc/<pid>/cmdline.
+            # Absolute paths for the shell and for sudo: the caller supplies part
+            # of this environment, and a caller-chosen PATH must never decide
+            # which binary crosses the privilege boundary.
             inner = [
-                "sudo",
+                _SUDO,
                 "-n",
                 "-u",
                 self.run_as_user,
@@ -185,13 +202,14 @@ class JobStore:
                 "--",
                 *inner,
             ]
-        return ["sh", "-c", _WRAPPER, str(d), *inner]
+        return [_SH, "-c", _WRAPPER, str(d), *inner]
 
     def _popen_env(self, env: dict[str, str]) -> dict[str, str]:
-        # The wrapper shell and sudo need a PATH of their own; sudo's secure_path
-        # resets PATH for the target command, which is what we want there.
-        path = env.get("PATH") or os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
-        return {**env, "PATH": path}
+        # The wrapper shell and sudo need a PATH of their own, and it is the
+        # agent's, never the caller's: whatever a request asks for, the binaries
+        # that run before the privilege drop are resolved against the image.
+        # sudo's secure_path resets PATH for the target command anyway.
+        return {**env, "PATH": os.environ.get("PATH") or _DEFAULT_PATH}
 
     def status(self, job_id: str) -> JobStatus:
         meta = self._meta(job_id)
@@ -234,21 +252,81 @@ class JobStore:
                 ids.append(job_id)
         return ids
 
+    def _signal_group(self, pgid: int, sig: signal.Signals) -> None:
+        """Signal the whole job group, on both sides of the privilege boundary.
+
+        In `run_as_user` mode the group is `sh` (ours) -> `sudo` (root) -> the
+        command (the job user). `os.killpg` from the worker reaches only the
+        `sh`: it may not signal root, and it may not signal another user's
+        processes. So the same signal goes back through sudo, where the job
+        user is allowed to signal its own. The group id is the `sh` pid, which
+        every descendant inherits.
+        """
+        _killpg(pgid, sig)
+        if self.run_as_user:
+            subprocess.run(
+                [
+                    _SUDO,
+                    "-n",
+                    "-u",
+                    self.run_as_user,
+                    "--",
+                    "kill",
+                    f"-{sig.name.removeprefix('SIG')}",
+                    "--",
+                    f"-{pgid}",
+                ],
+                check=False,
+            )
+
+    def _survivors(self, pgid: int) -> bool:
+        """True while anything in the job's process group is still alive."""
+        if self.run_as_user:
+            return (
+                subprocess.run(
+                    [_SUDO, "-n", "-u", self.run_as_user, "--", "pgrep", "-g", str(pgid)],
+                    check=False,
+                    capture_output=True,
+                ).returncode
+                == 0
+            )
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def _await_stopped(self, job_id: str, pgid: int, timeout: float) -> bool:
+        # The wrapper's own liveness is not enough: on the far side of sudo the
+        # command outlives the shell that spawned it, which is exactly how a
+        # cancel used to report success while the job kept running.
+        #
+        # The delay backs off because the survivor check costs a sudo and a
+        # pgrep once the wrapper is gone, and a job that takes its whole grace
+        # period to die would otherwise mean hundreds of them.
+        deadline = time.time() + timeout
+        delay = 0.05
+        while True:
+            if not self.status(job_id).running and not self._survivors(pgid):
+                return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(delay)
+            delay = min(delay * 1.5, 0.25)
+
     def cancel(self, job_id: str, grace_seconds: float, reason: str = "cancelled") -> None:
         if not self.status(job_id).running:
             return
         d = self.job_dir(job_id)
         (d / "reason").write_text(reason)
         pgid = self.pgid(job_id)
-        _killpg(pgid, signal.SIGTERM)
-        deadline = time.time() + grace_seconds
-        while time.time() < deadline and self.status(job_id).running:
-            time.sleep(0.05)
-        if self.status(job_id).running:
-            _killpg(pgid, signal.SIGKILL)
-            deadline = time.time() + 5
-            while time.time() < deadline and self.status(job_id).running:
-                time.sleep(0.05)
+        self._signal_group(pgid, signal.SIGTERM)
+        if not self._await_stopped(job_id, pgid, grace_seconds):
+            self._signal_group(pgid, signal.SIGKILL)
+            if not self._await_stopped(job_id, pgid, _KILL_GRACE_SECONDS):
+                # Recording an exit code here would tell the orchestrator the job
+                # is over while the command is still writing to the workspace.
+                raise RuntimeError(f"job {job_id}: process group {pgid} still has survivors")
         if not (d / "exit").exists():
             # The wrapper died with the group and never recorded an exit code.
             (d / "exit.tmp").write_text("-1")

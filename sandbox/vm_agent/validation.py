@@ -3,17 +3,30 @@
 What: the checks `exec_start`, `put_file`, and `get_file` run on caller input.
 Why: the VM does not trust the orchestrator with paths or credentials. Paths
 must stay under the workspace root, credential-shaped environment keys are
-refused so secrets cannot leak through the non-secret channel, and secrets are
-resolved from names to files the worker user owns.
+refused so secrets cannot leak through the non-secret channel, keys that steer
+a loader or a shell before the job's own code runs are refused because this
+environment is handed to a privileged wrapper, and secrets are resolved from
+names to files the worker user owns.
 Production: identical.
 """
 
+import re
 from pathlib import Path
 
 from sandbox.contract.errors import Incompatible
 
-FORBIDDEN_PREFIXES = ("AWS_",)
+# `LD_`/`DYLD_` preload and library paths execute attacker code inside whatever
+# the wrapper runs, sudo included; `BASH_ENV`/`ENV` are sourced by a
+# non-interactive shell before its first command.
+_WRAPPER_PREFIXES = ("LD_", "DYLD_")
+FORBIDDEN_PREFIXES = ("AWS_", *_WRAPPER_PREFIXES)
 FORBIDDEN_SUFFIXES = ("_TOKEN", "_SECRET", "_KEY")
+FORBIDDEN_KEYS = ("BASH_ENV", "ENV")
+
+# A key with `=` in it would split into a second variable inside Popen's
+# environment, and a key with `,` would forge an extra name in sudo's
+# --preserve-env list. Only real shell identifiers cross.
+_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def validate_path_under(path: str, root: Path) -> Path:
@@ -33,6 +46,12 @@ def validate_cwd(cwd: str, root: Path) -> Path:
 
 def validate_env(env: dict[str, str]) -> dict[str, str]:
     for key in env:
+        if not _KEY.match(key):
+            raise Incompatible(f"env key {key!r} is not a valid environment variable name")
+        if key in FORBIDDEN_KEYS or key.startswith(_WRAPPER_PREFIXES):
+            raise Incompatible(
+                f"env key {key!r} steers the privileged wrapper; it cannot come from a caller"
+            )
         if key.startswith(FORBIDDEN_PREFIXES) or key.endswith(FORBIDDEN_SUFFIXES):
             raise Incompatible(
                 f"env key {key!r} looks like a credential; pass it as a secret name instead"

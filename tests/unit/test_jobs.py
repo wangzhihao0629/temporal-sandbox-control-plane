@@ -2,7 +2,9 @@
 
 import os
 import signal
+import subprocess
 import time
+from unittest.mock import patch
 
 import pytest
 
@@ -133,14 +135,14 @@ def test_start_recovers_from_a_directory_left_by_a_crashed_start(store, tmp_path
 def test_wrap_hands_the_environment_to_sudo_not_to_argv(tmp_path):
     store = JobStore(tmp_path / "jobs", vm_id="sbx-x", run_as_user="agent")
     spec = _spec(tmp_path, "j9", ["claude", "-p", "do the thing"])
-    env = {"PATH": "/usr/bin", "HOME": "/home/agent", "GITHUB_TOKEN": "t"}
+    env = {"PATH": "/caller/bin", "HOME": "/home/agent", "GITHUB_TOKEN": "t"}
     d = store.job_dir("j9")
     assert store._wrap(spec, env, d) == [
-        "sh",
+        "/bin/sh",
         "-c",
         _WRAPPER,
         str(d),
-        "sudo",
+        "/usr/bin/sudo",
         "-n",
         "-u",
         "agent",
@@ -148,11 +150,78 @@ def test_wrap_hands_the_environment_to_sudo_not_to_argv(tmp_path):
         "--",
         *spec.argv,
     ]
-    assert store._popen_env(env) == {
-        "PATH": "/usr/bin",
-        "HOME": "/home/agent",
-        "GITHUB_TOKEN": "t",
-    }
+
+
+def test_the_wrapper_environment_takes_its_path_from_the_agent_not_the_caller(tmp_path):
+    # A caller-chosen PATH must not decide which `sh` or `sudo` runs, so the
+    # wrapper's own PATH is the agent's however the request was shaped.
+    store = JobStore(tmp_path / "jobs", vm_id="sbx-x", run_as_user="agent")
+    env = {"PATH": "/caller/bin", "HOME": "/home/agent"}
+    with patch.dict(os.environ, {"PATH": "/agent/bin"}):
+        assert store._popen_env(env) == {"PATH": "/agent/bin", "HOME": "/home/agent"}
+    with patch.dict(os.environ, {}, clear=True):
+        assert store._popen_env(env)["PATH"] == (
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        )
+
+
+def test_signal_group_signals_the_group_directly_when_there_is_no_sudo(store):
+    with patch("sandbox.vm_agent.jobs._killpg") as killpg:
+        store._signal_group(4242, signal.SIGTERM)
+    killpg.assert_called_once_with(4242, signal.SIGTERM)
+
+
+def test_signal_group_also_signals_through_sudo_when_jobs_run_as_another_user(tmp_path):
+    # os.killpg from the worker reaches only its own `sh`: sudo runs as root and
+    # the command as `agent`, and the worker may signal neither. The same signal
+    # therefore goes back through sudo, where the job user can signal its own.
+    store = JobStore(tmp_path / "jobs", vm_id="sbx-x", run_as_user="agent")
+    with (
+        patch("sandbox.vm_agent.jobs._killpg") as killpg,
+        patch("sandbox.vm_agent.jobs.subprocess.run") as run,
+    ):
+        store._signal_group(4242, signal.SIGKILL)
+    killpg.assert_called_once_with(4242, signal.SIGKILL)
+    assert run.call_args.args[0] == [
+        "/usr/bin/sudo",
+        "-n",
+        "-u",
+        "agent",
+        "--",
+        "kill",
+        "-KILL",
+        "--",
+        "-4242",
+    ]
+    assert run.call_args.kwargs["check"] is False
+
+
+def test_survivors_asks_pgrep_as_the_job_user_when_jobs_run_as_another_user(tmp_path):
+    store = JobStore(tmp_path / "jobs", vm_id="sbx-x", run_as_user="agent")
+    argv = ["/usr/bin/sudo", "-n", "-u", "agent", "--", "pgrep", "-g", "4242"]
+    with patch("sandbox.vm_agent.jobs.subprocess.run") as run:
+        run.return_value = subprocess.CompletedProcess(argv, 0, b"4243\n", b"")
+        assert store._survivors(4242) is True
+        run.return_value = subprocess.CompletedProcess(argv, 1, b"", b"")
+        assert store._survivors(4242) is False
+    assert run.call_args.args[0] == argv
+
+
+def test_cancel_refuses_to_record_an_exit_code_while_the_group_survives(store, tmp_path):
+    # The whole point of the sudo kill: without survivors gone, writing exit=-1
+    # would tell the orchestrator the job is over while it is still running.
+    store.start(_spec(tmp_path, "j10", ["sleep", "30"]), _env())
+    time.sleep(0.2)
+    pgid = store.pgid("j10")
+    with (
+        patch.object(JobStore, "_signal_group"),
+        patch("sandbox.vm_agent.jobs._KILL_GRACE_SECONDS", 0.2),
+        pytest.raises(RuntimeError) as err,
+    ):
+        store.cancel("j10", grace_seconds=0.1)
+    assert f"process group {pgid} still has survivors" in str(err.value)
+    assert not (store.job_dir("j10") / "exit").exists()
+    os.killpg(pgid, signal.SIGKILL)
 
 
 def test_a_job_id_that_collides_on_disk_is_refused(store, tmp_path):
