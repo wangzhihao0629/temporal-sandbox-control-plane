@@ -8,6 +8,8 @@ bridge. moto answers both APIs on one port instead.
 
 Usage: uv run python -m sandbox.bootstrap
 Called by scripts/up.sh after moto starts.
+Production: tables and buckets are created by Terraform; this module exists
+for the local stack and tests.
 """
 
 import os

@@ -10,6 +10,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOCAL="$ROOT/.local"
+MOTO_PORT="${SANDBOX_MOTO_PORT:-5050}"
 mkdir -p "$LOCAL"
 cd "$ROOT"
 
@@ -31,15 +32,21 @@ fi
 echo "    grpc 127.0.0.1:7233  ui http://localhost:8233"
 
 echo "==> moto (dynamodb + s3)"
-if ! (exec 3<>/dev/tcp/127.0.0.1/5050) 2>/dev/null; then
-  nohup uv run moto_server -H 0.0.0.0 -p 5050 >"$LOCAL/moto.log" 2>&1 &
+if curl -fsS -m 2 "http://127.0.0.1:${MOTO_PORT}/moto-api/" >/dev/null 2>&1; then
+  : # already up and it is actually moto
+elif (exec 3<>/dev/tcp/127.0.0.1/"${MOTO_PORT}") 2>/dev/null; then
+  echo "==> ERROR: port ${MOTO_PORT} is held by something that is not moto; set SANDBOX_MOTO_PORT to another port" >&2
+  exit 1
+else
+  [[ -x "$ROOT/.venv/bin/moto_server" ]] || uv sync
+  nohup "$ROOT/.venv/bin/moto_server" -H 0.0.0.0 -p "$MOTO_PORT" >"$LOCAL/moto.log" 2>&1 &
   echo $! >"$LOCAL/moto.pid"
   for _ in $(seq 1 30); do
-    (exec 3<>/dev/tcp/127.0.0.1/5050) 2>/dev/null && break
+    curl -fsS -m 2 "http://127.0.0.1:${MOTO_PORT}/moto-api/" >/dev/null 2>&1 && break
     sleep 1
   done
 fi
-echo "    dynamodb+s3 127.0.0.1:5050"
+echo "    dynamodb+s3 127.0.0.1:${MOTO_PORT}"
 
 GATEWAY="${SANDBOX_VM_GATEWAY:-192.168.64.1}"
 
@@ -48,9 +55,9 @@ echo "==> verifying a VM can reach the host moto server via the gateway"
 # not just \r-updated) ahead of the command's own output, so the HTTP response
 # is not necessarily line 1 of the capture: check the whole output for "HTTP/"
 # rather than just its first line.
-VM_CHECK="$(container run --rm alpine:3.20 wget -q -S -O /dev/null -T 5 "http://${GATEWAY}:5050/" 2>&1)" || true
+VM_CHECK="$(container run --rm alpine:3.20 wget -q -S -O /dev/null -T 5 "http://${GATEWAY}:${MOTO_PORT}/" 2>&1)" || true
 if [[ "$VM_CHECK" != *"HTTP/"* ]]; then
-  echo "==> ERROR: a VM could not reach the host moto server at ${GATEWAY}:5050" >&2
+  echo "==> ERROR: a VM could not reach the host moto server at ${GATEWAY}:${MOTO_PORT}" >&2
   echo "    got: $(tail -1 <<<"$VM_CHECK")" >&2
   exit 1
 fi
@@ -60,17 +67,17 @@ TEMPORAL_ADDRESS=127.0.0.1:7233
 TEMPORAL_NAMESPACE=default
 TEMPORAL_UI=http://localhost:8233
 VM_TEMPORAL_ADDRESS=${GATEWAY}:7233
-DYNAMODB_ENDPOINT=http://127.0.0.1:5050
-S3_ENDPOINT=http://127.0.0.1:5050
-VM_DYNAMODB_ENDPOINT=http://${GATEWAY}:5050
-VM_S3_ENDPOINT=http://${GATEWAY}:5050
+DYNAMODB_ENDPOINT=http://127.0.0.1:${MOTO_PORT}
+S3_ENDPOINT=http://127.0.0.1:${MOTO_PORT}
+VM_DYNAMODB_ENDPOINT=http://${GATEWAY}:${MOTO_PORT}
+VM_S3_ENDPOINT=http://${GATEWAY}:${MOTO_PORT}
 AWS_ACCESS_KEY_ID=local
 AWS_SECRET_ACCESS_KEY=localsecret
 AWS_DEFAULT_REGION=us-east-1
 SANDBOX_VM_IMAGE=sandbox-vm:dev
 SANDBOX_PROFILE=local
 EOF
-echo "==> wrote .env (moto 127.0.0.1:5050, vm gateway ${GATEWAY})"
+echo "==> wrote .env (moto 127.0.0.1:${MOTO_PORT}, vm gateway ${GATEWAY})"
 
 echo "==> tables and buckets"
 uv run python -m sandbox.bootstrap

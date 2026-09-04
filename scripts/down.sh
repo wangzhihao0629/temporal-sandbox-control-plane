@@ -2,6 +2,7 @@
 # Tear the local stack down: VMs, moto, the Temporal dev server, .env.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+MOTO_PORT="${SANDBOX_MOTO_PORT:-5050}"
 cd "$ROOT"
 
 echo "==> deleting sandbox VMs"
@@ -21,6 +22,13 @@ echo "==> stopping moto"
 if [[ -f .local/moto.pid ]]; then
   kill "$(cat .local/moto.pid)" 2>/dev/null && echo "    stopped"
   rm -f .local/moto.pid
+  for _ in $(seq 1 5); do
+    (exec 3<>/dev/tcp/127.0.0.1/"${MOTO_PORT}") 2>/dev/null || break
+    sleep 1
+  done
+  if (exec 3<>/dev/tcp/127.0.0.1/"${MOTO_PORT}") 2>/dev/null; then
+    echo "    WARNING: port ${MOTO_PORT} is still open after stopping moto" >&2
+  fi
 fi
 
 echo "==> stopping temporal dev server"
