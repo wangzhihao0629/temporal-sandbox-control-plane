@@ -3,8 +3,8 @@
 What: connect to Temporal, host acquire and release on the manager queue.
 Why: a separate process from the orchestrator so a manager outage never stalls
 a running turn, which goes straight to the VM's queue.
-Production: the sandbox-manager worker on EKS. Task 9 wires in the provider;
-Plan 2 adds the reconciler schedule.
+Production: the sandbox-manager worker on EKS. Plan 2 adds the reconciler
+schedule.
 """
 
 import asyncio
@@ -22,8 +22,9 @@ from sandbox.registry.client import Registry
 
 
 def build_provider():
-    """Task 9 replaces this with the Apple container provider."""
-    return None
+    from sandbox.manager.providers.apple_container import AppleContainerProvider
+
+    return AppleContainerProvider(image=os.environ.get("SANDBOX_VM_IMAGE", "sandbox-vm:dev"))
 
 
 async def main() -> None:
