@@ -46,6 +46,9 @@ _DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # How long a SIGKILLed group gets to disappear before cancel calls it a leak.
 _KILL_GRACE_SECONDS = 5.0
 
+# pgrep's "no processes matched". Every other non-zero code is the check failing.
+_PGREP_NO_MATCH = 1
+
 
 @dataclass(frozen=True)
 class JobStatus:
@@ -80,9 +83,16 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _killpg(pgid: int, sig: int) -> None:
+    # EPERM, not just ESRCH. Once the wrapper `sh` is dead, everything left in
+    # the group belongs to the job user, and Linux answers a killpg from
+    # sandbox-agent with EPERM rather than "no such process". Letting that
+    # propagate would abort _signal_group before the sudo kill that is the only
+    # thing able to reach those processes — which is precisely the SIGKILL
+    # escalation. Mirrors _pid_alive: a signal we may not send is not proof of
+    # anything, so say nothing and let the caller check for survivors.
     try:
         os.killpg(pgid, sig)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):
         pass
 
 
@@ -279,21 +289,34 @@ class JobStore:
                 check=False,
             )
 
-    def _survivors(self, pgid: int) -> bool:
+    def _survivors(self, job_id: str, pgid: int) -> bool:
         """True while anything in the job's process group is still alive."""
         if self.run_as_user:
-            return (
-                subprocess.run(
-                    [_SUDO, "-n", "-u", self.run_as_user, "--", "pgrep", "-g", str(pgid)],
-                    check=False,
-                    capture_output=True,
-                ).returncode
-                == 0
+            proc = subprocess.run(
+                [_SUDO, "-n", "-u", self.run_as_user, "--", "pgrep", "-g", str(pgid)],
+                check=False,
+                capture_output=True,
+                text=True,
             )
+            if proc.returncode == 0:
+                return True
+            if proc.returncode != _PGREP_NO_MATCH:
+                # Only rc 1 means "no match". A usage error, a missing pgrep, or
+                # sudo refusing all answer non-zero too, and reading those as
+                # "nothing left" is how cancel would write exit=-1 over a job
+                # that is still running. An unusable check is not an all-clear.
+                raise RuntimeError(
+                    f"job {job_id}: could not check for survivors "
+                    f"(pgrep rc={proc.returncode}: {proc.stderr.strip()})"
+                )
+            return False
         try:
             os.killpg(pgid, 0)
         except ProcessLookupError:
             return False
+        except PermissionError:
+            # Something is there; we just may not signal it.
+            return True
         return True
 
     def _await_stopped(self, job_id: str, pgid: int, timeout: float) -> bool:
@@ -307,7 +330,7 @@ class JobStore:
         deadline = time.time() + timeout
         delay = 0.05
         while True:
-            if not self.status(job_id).running and not self._survivors(pgid):
+            if not self.status(job_id).running and not self._survivors(job_id, pgid):
                 return True
             if time.time() >= deadline:
                 return False

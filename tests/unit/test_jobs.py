@@ -196,15 +196,52 @@ def test_signal_group_also_signals_through_sudo_when_jobs_run_as_another_user(tm
     assert run.call_args.kwargs["check"] is False
 
 
+def test_a_denied_killpg_still_lets_the_sudo_kill_through(tmp_path):
+    # The SIGKILL escalation is reached exactly when the wrapper `sh` is already
+    # dead and only the job user's processes are left in the group. Linux
+    # answers that killpg with EPERM, not ESRCH, and letting it propagate would
+    # abort before the sudo kill that is the only thing able to reach them.
+    store = JobStore(tmp_path / "jobs", vm_id="sbx-x", run_as_user="agent")
+    with (
+        patch("sandbox.vm_agent.jobs.os.killpg", side_effect=PermissionError(1, "not permitted")),
+        patch("sandbox.vm_agent.jobs.subprocess.run") as run,
+    ):
+        store._signal_group(4242, signal.SIGKILL)
+    assert run.call_args.args[0] == [
+        "/usr/bin/sudo",
+        "-n",
+        "-u",
+        "agent",
+        "--",
+        "kill",
+        "-KILL",
+        "--",
+        "-4242",
+    ]
+
+
 def test_survivors_asks_pgrep_as_the_job_user_when_jobs_run_as_another_user(tmp_path):
     store = JobStore(tmp_path / "jobs", vm_id="sbx-x", run_as_user="agent")
     argv = ["/usr/bin/sudo", "-n", "-u", "agent", "--", "pgrep", "-g", "4242"]
     with patch("sandbox.vm_agent.jobs.subprocess.run") as run:
-        run.return_value = subprocess.CompletedProcess(argv, 0, b"4243\n", b"")
-        assert store._survivors(4242) is True
-        run.return_value = subprocess.CompletedProcess(argv, 1, b"", b"")
-        assert store._survivors(4242) is False
+        run.return_value = subprocess.CompletedProcess(argv, 0, "4243\n", "")
+        assert store._survivors("j1", 4242) is True
+        run.return_value = subprocess.CompletedProcess(argv, 1, "", "")
+        assert store._survivors("j1", 4242) is False
     assert run.call_args.args[0] == argv
+
+
+def test_a_survivor_check_that_cannot_run_is_not_an_all_clear(tmp_path):
+    # Only rc 1 is "no match". Reading a sudo denial or a missing pgrep as
+    # "nothing left" is how cancel would write exit=-1 over a live job.
+    store = JobStore(tmp_path / "jobs", vm_id="sbx-x", run_as_user="agent")
+    argv = ["/usr/bin/sudo", "-n", "-u", "agent", "--", "pgrep", "-g", "4242"]
+    with patch("sandbox.vm_agent.jobs.subprocess.run") as run:
+        run.return_value = subprocess.CompletedProcess(argv, 2, "", "sudo: a password is required")
+        with pytest.raises(RuntimeError) as err:
+            store._survivors("j1", 4242)
+    assert "job j1: could not check for survivors" in str(err.value)
+    assert "pgrep rc=2" in str(err.value) and "password is required" in str(err.value)
 
 
 def test_cancel_refuses_to_record_an_exit_code_while_the_group_survives(store, tmp_path):
