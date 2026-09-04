@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tear the local stack down: VMs, infra containers, the Temporal dev server, .env.
+# Tear the local stack down: VMs, moto, the Temporal dev server, .env.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -13,10 +13,15 @@ for item in json.load(sys.stdin):
         subprocess.run(["container", "delete", "--force", name], check=False)
         print("    deleted", name)'
 
-echo "==> deleting infra containers"
-for name in sandbox-dynamodb sandbox-minio; do
-  container delete --force "$name" >/dev/null 2>&1 && echo "    deleted $name"
-done
+echo "==> deleting old infra containers (pre-moto transition)"
+container delete --force sandbox-dynamodb >/dev/null 2>&1 || true
+container delete --force sandbox-minio >/dev/null 2>&1 || true
+
+echo "==> stopping moto"
+if [[ -f .local/moto.pid ]]; then
+  kill "$(cat .local/moto.pid)" 2>/dev/null && echo "    stopped"
+  rm -f .local/moto.pid
+fi
 
 echo "==> stopping temporal dev server"
 if [[ -f .local/temporal.pid ]]; then

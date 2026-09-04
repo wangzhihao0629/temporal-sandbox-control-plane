@@ -1,7 +1,13 @@
-"""Create tables and buckets once the local endpoints answer.
+"""Create tables and buckets once the local endpoint answers.
+
+A single `moto_server` process stands in for DynamoDB and S3 locally: on a
+managed laptop, host processes can be confined to loopback, so real
+DynamoDB Local and MinIO containers on the `container` bridge network are
+unreachable from here even though a VM can reach the same host over that
+bridge. moto answers both APIs on one port instead.
 
 Usage: uv run python -m sandbox.bootstrap
-Called by scripts/up.sh after the infra containers start.
+Called by scripts/up.sh after moto starts.
 """
 
 import os
@@ -32,7 +38,6 @@ def wait_http(url: str, timeout: float = 90) -> None:
 def main() -> None:
     envfile.load()
     wait_http(os.environ["DYNAMODB_ENDPOINT"])
-    wait_http(os.environ["S3_ENDPOINT"] + "/minio/health/live")
     created = create_tables(Registry.resource_from_env())
     print(f"tables created: {created or 'none, already present'}")
     store = ObjectStore.from_env()
