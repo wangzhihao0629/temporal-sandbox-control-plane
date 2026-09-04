@@ -1,4 +1,11 @@
-"""Print VM rows and recent events. The dashboard before there is a dashboard.
+"""Print VM rows and recent events.
+
+What: one table of every registered VM and a tail of the event stream.
+Why: the registry is the system's real state, and being able to read it in a
+terminal is what makes a lease, a wipe, or a stuck row explainable without the
+Temporal UI. It is the dashboard before there is a dashboard.
+Production: the status API serves the same join; this stays as the fallback for
+when the API is what is broken.
 
 Usage: uv run python -m sandbox.registry.show
 """

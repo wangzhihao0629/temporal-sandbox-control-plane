@@ -1,4 +1,5 @@
-# tests/unit/test_timeutil.py
+"""Timestamps: UTC ISO strings in, aware datetimes and TTL epochs out."""
+
 from datetime import UTC, timedelta
 
 from sandbox import timeutil

@@ -50,6 +50,15 @@ async def _run(env, orchestrator, wf, arg):
     )
 
 
+async def _wait_job_started(registry, vm_id, seconds=10):
+    """Block until exec_start has recorded a job row, so the cancel lands mid-job."""
+    for _ in range(int(seconds / 0.1)):
+        if registry.list_jobs(vm_id):
+            return
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"{vm_id} never started a job within {seconds}s")
+
+
 async def test_boot_registers_then_goes_idle(vm, aws):
     registry, _ = aws
     row = registry.get_vm(vm.vm_id)
@@ -274,7 +283,7 @@ async def test_cancelling_the_workflow_kills_the_job(env, aws, vm, orchestrator)
         id=f"cancel-{uuid.uuid4().hex[:8]}",
         task_queue=orchestrator,
     )
-    await asyncio.sleep(2)
+    await _wait_job_started(registry, vm.vm_id)
     await handle.cancel()
     with pytest.raises(WorkflowFailureError) as err:
         await handle.result()

@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from temporalio.client import WorkflowFailureError
+from temporalio.exceptions import CancelledError
 from temporalio.worker import Worker
 
 from sandbox.client import Timeouts
@@ -57,6 +58,14 @@ async def _wait_state(registry, vm_id, state, seconds=5):
             return
         await asyncio.sleep(0.1)
     raise AssertionError(f"{vm_id} never reached {state}: {registry.get_vm(vm_id)['state']}")
+
+
+async def _wait_any_state(registry, vm_id, states, seconds=10):
+    for _ in range(int(seconds / 0.1)):
+        if registry.get_vm(vm_id)["state"] in states:
+            return registry.get_vm(vm_id)["state"]
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"{vm_id} never reached {states}: {registry.get_vm(vm_id)['state']}")
 
 
 async def _wait_job_started(registry, vm_id, seconds=10):
@@ -157,5 +166,39 @@ async def test_wait_reattaches_after_the_vm_worker_restarts(
         assert result.outcome == "ok" and result.stdout == "done\n"
         jobs = registry.list_jobs(vm.vm_id)
         assert len(jobs) == 1 and jobs[0]["status"] == "exited"
+    finally:
+        await vm.stop()
+
+
+async def test_cancelling_the_workflow_kills_the_job_and_gives_the_vm_back(
+    env, aws, manager, orchestrator, tmp_path
+):
+    registry, store = aws
+    vm = await InProcessVm(env.client, registry, store, tmp_path).start()
+    try:
+        handle = await env.client.start_workflow(
+            ExerciseWorkflow.run,
+            ExerciseParams(
+                scenario="long", sleep_seconds=60, workspace_root=str(vm.workspace_root)
+            ),
+            id=f"c-cancel-{uuid.uuid4().hex[:8]}",
+            task_queue=orchestrator,
+        )
+        await _wait_job_started(registry, vm.vm_id)
+        await handle.cancel()
+        with pytest.raises(WorkflowFailureError) as err:
+            await handle.result()
+        assert isinstance(err.value.cause, CancelledError)
+        # A cancelled workflow still leaves through `lease()`'s finally, so the
+        # VM must not stay leased: nothing else would ever hand it back.
+        await _wait_any_state(registry, vm.vm_id, ("recycling", "idle"))
+        # The kill trails the workflow's own failure — the activity learns of
+        # the cancellation on its next heartbeat, and the wipe that follows
+        # `recycling` is the backstop — so poll rather than assert immediately.
+        jobs = vm.runtime.jobs
+        deadline = time.monotonic() + 30
+        while jobs.running_job_ids() and time.monotonic() < deadline:
+            await asyncio.sleep(0.25)
+        assert jobs.running_job_ids() == []
     finally:
         await vm.stop()

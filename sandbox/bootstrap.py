@@ -1,10 +1,10 @@
 """Create tables and buckets once the local endpoint answers.
 
-A single `moto_server` process stands in for DynamoDB and S3 locally: on a
-managed laptop, host processes can be confined to loopback, so real
-DynamoDB Local and MinIO containers on the `container` bridge network are
-unreachable from here even though a VM can reach the same host over that
-bridge. moto answers both APIs on one port instead.
+A single `moto_server` process stands in for DynamoDB and S3 locally, answering
+both APIs on one port. It replaced a pair of containers on the `container`
+bridge network: on a managed laptop, host processes can be confined to
+loopback, so the host cannot reach that bridge even though a VM can reach a
+host listener over it.
 
 Usage: uv run python -m sandbox.bootstrap
 Called by scripts/up.sh after moto starts.

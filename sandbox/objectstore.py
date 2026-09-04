@@ -3,8 +3,8 @@
 What: a thin boto3 S3 wrapper keyed by s3:// URIs.
 Why: files, logs, artifacts, and envelopes never travel inside Temporal
 payloads; they move through here and only URIs cross the wire. The endpoint
-comes from the environment so the same code talks to MinIO locally and S3 in
-production.
+comes from the environment so the same code talks to the local moto server and
+to S3 in production.
 Production: identical, minus the endpoint override.
 """
 

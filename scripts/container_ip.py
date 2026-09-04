@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Print a container's IPv4 address, or its gateway with --gateway.
+"""Print a VM container's IPv4 address, or its bridge gateway with --gateway.
+
+A debugging helper for the `sbx-*` containers: when a VM cannot reach Temporal
+or the object store, the first question is which addresses it actually has.
+Reads `container ls --all --format json` and pulls `ipv4Address` / `ipv4Gateway`
+off the container's first network.
 
 Usage: scripts/container_ip.py [--gateway] <container-name>
-Reads `container ls --all --format json`; see Task 9 for the JSON shape.
 """
 
 import json

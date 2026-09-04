@@ -3,8 +3,9 @@
 What: every few seconds, bump the registry heartbeat and act on the row's state.
 Why: the registry is how the manager talks to the VM without a direct call.
 A row flipped to `recycling` means the lease ended; the VM wipes itself and
-flips back to `idle`. A missing row means the reconciler declared this VM dead,
-and the process exits so the container stops.
+flips back to `idle`. A row that is missing, `dead`, or `terminated` means the
+reconciler has written this VM off, and the process exits so the container
+stops instead of heartbeating a row nobody will ever claim again.
 Production: identical, at 30 seconds instead of 5.
 """
 
@@ -18,23 +19,28 @@ from sandbox.vm_agent.config import AgentConfig
 logger = logging.getLogger(__name__)
 
 
+# States the reconciler writes when it has given up on a VM. Heartbeating past
+# one of them keeps a machine alive that nothing will ever lease again.
+WRITTEN_OFF = ("terminated", "dead")
+
+
 class HeartbeatLoop:
     def __init__(
         self,
         cfg: AgentConfig,
         registry: Registry,
         wipe_fn: Callable[[], None],
-        on_row_missing: Callable[[], None],
+        on_written_off: Callable[[], None],
     ) -> None:
         self.cfg = cfg
         self.registry = registry
         self.wipe_fn = wipe_fn
-        self.on_row_missing = on_row_missing
+        self.on_written_off = on_written_off
 
     async def tick(self) -> str | None:
         state = await asyncio.to_thread(self.registry.heartbeat, self.cfg.vm_id)
-        if state is None:
-            self.on_row_missing()
+        if state is None or state in WRITTEN_OFF:
+            self.on_written_off()
             return None
         if state == "recycling":
             await asyncio.to_thread(self.wipe_fn)
@@ -55,7 +61,7 @@ class HeartbeatLoop:
         while not stop.is_set():
             # A throttled or briefly unreachable registry must not kill the loop:
             # the VM would then stop heartbeating and the reconciler would declare
-            # a healthy machine dead. Only a missing row ends it.
+            # a healthy machine dead. Only a row that is gone or written off ends it.
             try:
                 state = await self.tick()
             except Exception:

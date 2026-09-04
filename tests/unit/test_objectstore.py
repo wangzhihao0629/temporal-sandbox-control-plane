@@ -1,4 +1,5 @@
-# tests/unit/test_objectstore.py
+"""Object store: s3:// URI parsing and the bytes, file, and JSON round trips."""
+
 import json
 
 from sandbox.objectstore import ObjectStore

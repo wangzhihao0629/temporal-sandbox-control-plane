@@ -40,7 +40,7 @@ class AgentRuntime:
             cfg,
             registry,
             wipe_fn=lambda: wipe(cfg, self.jobs),
-            on_row_missing=self.stop_event.set,
+            on_written_off=self.stop_event.set,
         )
         self._worker: Worker | None = None
         self._worker_task: asyncio.Task | None = None
@@ -102,13 +102,21 @@ class AgentRuntime:
 
     async def drain(self) -> None:
         self.drain_state.draining = True
-        await asyncio.to_thread(
-            self.registry.set_state, self.cfg.vm_id, "draining", reason="shutdown requested"
-        )
-        await asyncio.to_thread(self.registry.emit, "drain", "vm-agent", "draining", self.cfg.vm_id)
-        for job_id in self.jobs.running_job_ids():
-            await asyncio.to_thread(self.jobs.cancel, job_id, 10, "cancelled")
-        await self.stop(final_state="terminated")
+        try:
+            await asyncio.to_thread(
+                self.registry.set_state, self.cfg.vm_id, "draining", reason="shutdown requested"
+            )
+            await asyncio.to_thread(
+                self.registry.emit, "drain", "vm-agent", "draining", self.cfg.vm_id
+            )
+            for job_id in self.jobs.running_job_ids():
+                await asyncio.to_thread(self.jobs.cancel, job_id, 10, "cancelled")
+        finally:
+            # An unreachable registry, or a job whose group refuses to die, must
+            # still stop the worker: `stop` is what sets `stop_event`, and
+            # `run_until_stopped` is waiting on it. Without this the VM would
+            # hang draining forever with its queue still being polled.
+            await self.stop(final_state="terminated")
 
     async def stop(self, final_state: str = "terminated") -> None:
         if self._stopped:

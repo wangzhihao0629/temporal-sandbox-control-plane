@@ -1,4 +1,5 @@
-# tests/unit/test_envfile.py
+"""Reading .env into the process environment without clobbering what is set."""
+
 import os
 
 from sandbox import envfile

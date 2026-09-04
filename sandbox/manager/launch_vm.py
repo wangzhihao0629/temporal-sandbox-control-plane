@@ -1,9 +1,13 @@
 """Launch one VM by hand.
 
-Usage: uv run python -m sandbox.manager.launch_vm [pool]
+What: pick a vm_id, ask the Apple `container` provider for a machine, print the id.
+Why: the demo needs capacity before there is anything to reconcile. Everything a
+VM needs to find its way home — Temporal, the registry, the object store — is
+computed here rather than baked into the image, so the same image boots against
+any stack.
+Production: the reconciler's scale-out decides this, and the provider is an ASG.
 
-Plan 2's reconciler makes this unnecessary; until then it is how the demo gets
-capacity.
+Usage: uv run python -m sandbox.manager.launch_vm [pool]
 """
 
 import sys

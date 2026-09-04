@@ -27,10 +27,15 @@ RUN install -d -m 0755 -o sandbox-agent -g sandbox-agent /var/lib/sandbox \
  && install -d -m 0750 -o sandbox-agent -g sandbox-agent /etc/sandbox/secrets \
  && install -d -m 2775 -o agent -g agent /private/tmp/sandbox
 
+# Dependencies come from the lockfile scripts/build-image.sh exports, and the
+# sandbox package is installed with --no-deps on top, so pip never resolves a
+# version the tests have not seen.
 COPY pyproject.toml /opt/sandbox/src/pyproject.toml
+COPY images/vm/requirements.txt /opt/sandbox/src/requirements.txt
 COPY sandbox /opt/sandbox/src/sandbox
 RUN python3 -m venv /opt/sandbox/venv \
- && /opt/sandbox/venv/bin/pip install --no-cache-dir /opt/sandbox/src
+ && /opt/sandbox/venv/bin/pip install --no-cache-dir -r /opt/sandbox/src/requirements.txt \
+ && /opt/sandbox/venv/bin/pip install --no-cache-dir --no-deps /opt/sandbox/src
 
 # Dummy secrets so ExecSpec.secrets=["github_token"] resolves locally. In
 # production these are written by the host's token refresher.

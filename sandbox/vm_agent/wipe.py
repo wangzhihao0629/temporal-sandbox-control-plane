@@ -13,25 +13,38 @@ import subprocess
 from sandbox.vm_agent.config import AgentConfig
 from sandbox.vm_agent.jobs import JobStore
 
+_SUDO = "/usr/bin/sudo"
+
 
 def wipe(cfg: AgentConfig, jobs: JobStore) -> None:
     for job_id in jobs.running_job_ids():
         jobs.cancel(job_id, grace_seconds=2, reason="cancelled")
     if cfg.run_as_user:
         subprocess.run(
-            ["sudo", "-n", "-u", cfg.run_as_user, "--", "pkill", "-KILL", "-u", cfg.run_as_user],
+            [_SUDO, "-n", "-u", cfg.run_as_user, "--", "pkill", "-KILL", "-u", cfg.run_as_user],
             check=False,
         )
+        # argv, not `sh -c`: the workspace root is configuration rather than
+        # caller input, but interpolating any path into a shell string is how a
+        # directory with a quote or a space in it becomes a command.
         subprocess.run(
             [
-                "sudo",
+                _SUDO,
                 "-n",
                 "-u",
                 cfg.run_as_user,
                 "--",
-                "sh",
-                "-c",
-                f'find "{cfg.workspace_root}" -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +',
+                "find",
+                str(cfg.workspace_root),
+                "-mindepth",
+                "1",
+                "-maxdepth",
+                "1",
+                "-exec",
+                "rm",
+                "-rf",
+                "{}",
+                "+",
             ],
             check=False,
         )

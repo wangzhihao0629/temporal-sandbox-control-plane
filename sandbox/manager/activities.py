@@ -89,7 +89,11 @@ class ManagerActivities:
                 return
             if self.provider is not None:
                 self.provider.terminate(row.get("provider_ref", req.vm_id))
-            self.registry.release(req.vm_id, req.lease_id, "destroy")
+            if not self.registry.release(req.vm_id, req.lease_id, "destroy"):
+                # Someone else released this lease between the read above and
+                # here. The row belongs to them now; stamping `terminated` on it
+                # would trample a lease this activity no longer holds.
+                return
             self.registry.set_state(req.vm_id, "terminated", reason="destroyed")
         else:
             if not self.registry.release(req.vm_id, req.lease_id, req.disposition):

@@ -1,3 +1,5 @@
+"""The package imports and reports the version the image installs."""
+
 import sandbox
 
 

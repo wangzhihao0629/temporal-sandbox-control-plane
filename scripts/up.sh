@@ -41,10 +41,21 @@ else
   [[ -x "$ROOT/.venv/bin/moto_server" ]] || uv sync
   nohup "$ROOT/.venv/bin/moto_server" -H 0.0.0.0 -p "$MOTO_PORT" >"$LOCAL/moto.log" 2>&1 &
   echo $! >"$LOCAL/moto.pid"
+  # Falling through this loop without an answer used to leave `up` reporting
+  # success and every later step failing on a connection refused.
+  moto_ready=""
   for _ in $(seq 1 30); do
-    curl -fsS -m 2 "http://127.0.0.1:${MOTO_PORT}/moto-api/" >/dev/null 2>&1 && break
+    if curl -fsS -m 2 "http://127.0.0.1:${MOTO_PORT}/moto-api/" >/dev/null 2>&1; then
+      moto_ready=1
+      break
+    fi
     sleep 1
   done
+  if [[ -z "$moto_ready" ]]; then
+    echo "==> ERROR: moto did not answer on 127.0.0.1:${MOTO_PORT} within 30s" >&2
+    echo "    see $LOCAL/moto.log" >&2
+    exit 1
+  fi
 fi
 echo "    dynamodb+s3 127.0.0.1:${MOTO_PORT}"
 
