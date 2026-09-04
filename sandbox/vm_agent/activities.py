@@ -13,11 +13,13 @@ import os
 import shutil
 import subprocess
 import time
+from dataclasses import replace
+from datetime import timedelta
 
 from temporalio import activity
 
 from sandbox.contract import names
-from sandbox.contract.errors import HostDraining
+from sandbox.contract.errors import HostDraining, Incompatible
 from sandbox.contract.types import (
     ArtifactRef,
     ArtifactRequest,
@@ -55,6 +57,18 @@ _VM_IDENTITY_KEYS = (
     "AWS_SECRET_ACCESS_KEY",
     "AWS_DEFAULT_REGION",
 )
+
+
+def _heartbeat_interval(timeout: timedelta | None) -> float:
+    """How often exec_wait should beat, given the timeout Temporal will enforce.
+
+    A fixed cadence is only safe while it is comfortably under the caller's
+    heartbeat timeout. A caller that asks for a tighter one gets a proportionally
+    tighter cadence instead of a VM that looks stuck between beats.
+    """
+    if timeout is None:
+        return _HEARTBEAT_EVERY
+    return min(_HEARTBEAT_EVERY, timeout.total_seconds() / 3)
 
 
 class VmActivities:
@@ -107,11 +121,15 @@ class VmActivities:
             }
         )
         env.update(validate_env(spec.env))
-        # The VM's own object-store identity, never the caller's, and applied
-        # after the caller's env so a request cannot redirect the VM at another
-        # endpoint. In production this is the instance's narrow role; locally it
-        # is the MinIO user.
+        # The VM's own object-store identity, never the caller's. Each key is
+        # dropped first and only then re-injected from the agent's environment:
+        # injecting conditionally alone would leave a caller-supplied value in
+        # place wherever the agent has no value of its own, which is exactly how
+        # a request would redirect the VM at an endpoint it chose. In production
+        # this is the instance's narrow role; locally it is the moto server the
+        # host stack runs.
         for key in _VM_IDENTITY_KEYS:
+            env.pop(key, None)
             if key in os.environ:
                 env[key] = os.environ[key]
         env.update(resolve_secrets(spec.secrets, self.cfg.secrets_dir))
@@ -124,7 +142,7 @@ class VmActivities:
     def _mkdir_cwd(self, cwd) -> None:
         if self.cfg.run_as_user:
             subprocess.run(
-                ["sudo", "-n", "-u", self.cfg.run_as_user, "--", "mkdir", "-p", str(cwd)],
+                ["/usr/bin/sudo", "-n", "-u", self.cfg.run_as_user, "--", "mkdir", "-p", str(cwd)],
                 check=True,
             )
         else:
@@ -138,6 +156,11 @@ class VmActivities:
             if log_uri and path.exists():
                 self.store.upload_file(path, f"{log_uri.rstrip('/')}/{stream}.log")
         return sizes
+
+    async def _stop_and_flush(self, job_id: str, log_uri: str, reason: str, grace: float) -> None:
+        """Kill the job, then push whatever it wrote before it died."""
+        await asyncio.to_thread(self.jobs.cancel, job_id, grace, reason)
+        await asyncio.to_thread(self._sync_logs, job_id, log_uri)
 
     def _result(self, job_id: str, spec: ExecSpec) -> ExecResult:
         st = self.jobs.status(job_id)
@@ -166,7 +189,10 @@ class VmActivities:
         env = self._job_env(spec)
         if not self.jobs.exists(spec.job_id):
             await asyncio.to_thread(self._mkdir_cwd, cwd)
-        job = await asyncio.to_thread(self.jobs.start, spec, env)
+        # The record on disk carries the resolved cwd, not the caller's string:
+        # everything downstream — the wrapper's working directory, a reattaching
+        # wait — reads it back from there and must see what was validated.
+        job = await asyncio.to_thread(self.jobs.start, replace(spec, cwd=str(cwd)), env)
         info = activity.info()
         await asyncio.to_thread(
             self.registry.put_job,
@@ -183,7 +209,13 @@ class VmActivities:
 
     @activity.defn(name=names.EXEC_WAIT)
     async def exec_wait(self, req: WaitRequest) -> ExecResult:
-        spec = await asyncio.to_thread(self.jobs.load_spec, req.job_id)
+        try:
+            spec = await asyncio.to_thread(self.jobs.load_spec, req.job_id)
+        except FileNotFoundError:
+            # Retrying cannot make a job appear on this VM: either the caller
+            # invented the id or it belongs to a machine that is gone.
+            raise Incompatible(f"unknown job {req.job_id}") from None
+        interval = _heartbeat_interval(activity.info().heartbeat_timeout)
         last_heartbeat = 0.0
         try:
             while True:
@@ -192,8 +224,7 @@ class VmActivities:
                 # report the drain's kill as an ordinary ending and let the
                 # orchestrator believe the command ran to completion here.
                 if self.drain.draining:
-                    await asyncio.to_thread(self.jobs.cancel, req.job_id, 10, "cancelled")
-                    await asyncio.to_thread(self._sync_logs, req.job_id, spec.log_uri)
+                    await self._stop_and_flush(req.job_id, spec.log_uri, "cancelled", 10)
                     raise HostDraining()
                 st = self.jobs.status(req.job_id)
                 if not st.running:
@@ -202,7 +233,7 @@ class VmActivities:
                     await asyncio.to_thread(self.jobs.cancel, req.job_id, 5, "timed_out")
                     break
                 now = time.time()
-                if now - last_heartbeat >= _HEARTBEAT_EVERY:
+                if now - last_heartbeat >= interval:
                     sizes = await asyncio.to_thread(self._sync_logs, req.job_id, spec.log_uri)
                     activity.heartbeat(
                         {
@@ -215,20 +246,22 @@ class VmActivities:
                     last_heartbeat = now
                 await asyncio.sleep(_POLL_EVERY)
         except asyncio.CancelledError:
+            # Shielded: a second cancellation while the kill is in flight must
+            # not skip the log flush, or the tail of a cancelled job is lost.
             if self.drain.draining:
                 # A drain stops the worker, so the cancellation usually arrives
                 # before the loop's own drain check fires. The orchestrator has
                 # to hear that the host is going away — that it should re-dispatch
                 # elsewhere — and not that its job was cancelled or that the
                 # worker will reattach to it.
-                await asyncio.to_thread(self.jobs.cancel, req.job_id, 10, "cancelled")
-                await asyncio.to_thread(self._sync_logs, req.job_id, spec.log_uri)
+                await asyncio.shield(
+                    self._stop_and_flush(req.job_id, spec.log_uri, "cancelled", 10)
+                )
                 raise HostDraining() from None
             if activity.is_worker_shutdown():
                 # Leave the job running; the retried wait will reattach to it.
                 raise
-            await asyncio.to_thread(self.jobs.cancel, req.job_id, 10, "cancelled")
-            await asyncio.to_thread(self._sync_logs, req.job_id, spec.log_uri)
+            await asyncio.shield(self._stop_and_flush(req.job_id, spec.log_uri, "cancelled", 10))
             raise
         await asyncio.to_thread(self._sync_logs, req.job_id, spec.log_uri)
         result = self._result(req.job_id, spec)

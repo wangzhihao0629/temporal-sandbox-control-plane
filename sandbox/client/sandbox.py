@@ -8,6 +8,9 @@ call is idempotent on an id the workflow chose, translates infrastructure
 failures to `LeaseLost`, and refuses further calls once the lease is lost so a
 workflow cannot keep hammering a dead queue. Job outcomes are data; `exec` with
 `check=True` turns a non-zero exit into `ExecFailed` for callers who want that.
+Release retries forever, because it runs from `lease()`'s `finally`: the manager
+is idempotent on the lease id, so a manager outage should delay the release, not
+replace the workflow's real outcome with an error raised while cleaning up.
 `workspace_root` mirrors the agent's `SANDBOX_WORKSPACE_ROOT`: both sides default
 to the contract's root, and a VM rooted elsewhere is told so at construction
 rather than having every caller pass a cwd.
@@ -25,6 +28,7 @@ from sandbox.client.timeouts import Timeouts
 from sandbox.client.translate import translate
 from sandbox.contract import names
 from sandbox.contract.errors import (
+    HOST_DRAINING,
     INCOMPATIBLE,
     LEASE_LOST,
     NO_CAPACITY,
@@ -49,6 +53,12 @@ from sandbox.contract.types import (
     VmInfo,
     WaitRequest,
 )
+
+# Retrying any of these on the VM's own queue is retrying against a machine that
+# will not answer differently. `HostDraining` is a per-VM queue's way of saying
+# the host is going away: the retry would sit on that queue until it times out,
+# where translating it to `LeaseLost` now lets the caller acquire another VM.
+VM_NON_RETRYABLE = (LEASE_LOST, INCOMPATIBLE, HOST_DRAINING)
 
 
 class Lease:
@@ -79,7 +89,6 @@ class Lease:
         start_to_close: timedelta,
         heartbeat_timeout: timedelta | None = None,
         result_type=None,
-        max_attempts: int = 3,
     ):
         if self.lost:
             raise LeaseLost(f"lease {self.lease.lease_id} on {self.lease.vm_id} was lost")
@@ -92,9 +101,9 @@ class Lease:
                 start_to_close_timeout=start_to_close,
                 heartbeat_timeout=heartbeat_timeout,
                 retry_policy=RetryPolicy(
-                    maximum_attempts=max_attempts,
+                    maximum_attempts=3,
                     initial_interval=timedelta(seconds=1),
-                    non_retryable_error_types=[LEASE_LOST, INCOMPATIBLE],
+                    non_retryable_error_types=list(VM_NON_RETRYABLE),
                 ),
                 result_type=result_type,
             )
@@ -214,7 +223,12 @@ class Sandbox:
             ),
             task_queue=names.MANAGER_TASK_QUEUE,
             start_to_close_timeout=self.t.short,
-            retry_policy=RetryPolicy(maximum_attempts=10, initial_interval=timedelta(seconds=1)),
+            # No maximum_attempts on purpose: see the release note in the module
+            # docstring. Giving up here would raise out of `lease()`'s finally
+            # and bury whatever the workflow was actually doing.
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=1), maximum_interval=timedelta(seconds=30)
+            ),
         )
 
     @asynccontextmanager

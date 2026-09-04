@@ -1,11 +1,13 @@
 """Registry: conditional claim and release against moto."""
 
 import time
+from datetime import timedelta
 
 import pytest
 
 from sandbox.registry.client import LEASE_FIELDS
 from sandbox.registry.schema import STATES
+from sandbox.timeutil import epoch_in, now, now_iso, to_iso
 
 
 def _register(registry, vm_id, pool="demo", labels=None):
@@ -78,7 +80,29 @@ def test_re_registering_a_leased_vm_does_not_free_it(registry):
     assert after["lease_id"] == leased["lease_id"]
     assert after["protected"] is True
     assert after["agent_version"] == "test-2"
+    # `booting` here would be a row nothing can reach: unclaimable because the
+    # lease fields are still set, and invisible to find_lease_by_request once
+    # the agent's own boot sequence follows the registration with `idle`.
+    assert after["state"] == "leased"
+    assert registry.find_lease_by_request("r1")["vm_id"] == "sbx-a"
     assert _claim(registry, "r2") is None
+
+
+def test_re_registering_an_unleased_vm_does_move_it_back_to_booting(registry):
+    _register(registry, "sbx-a")
+    row = _claim(registry, "r1")
+    assert registry.release("sbx-a", row["lease_id"], "recycle") is True
+    assert registry.get_vm("sbx-a")["state"] == "recycling"
+    registry.register_vm(
+        vm_id="sbx-a",
+        pool="demo",
+        provider_ref="sbx-a",
+        agent_version="test-2",
+        contract_majors=[1],
+        labels={},
+    )
+    after = registry.get_vm("sbx-a")
+    assert after["state"] == "booting" and after["agent_version"] == "test-2"
 
 
 def test_claim_respects_labels_and_contract_major(registry):
@@ -157,3 +181,38 @@ def test_job_floats_round_trip_as_floats(registry):
     job = registry.list_jobs("sbx-a")[0]
     assert job["duration_seconds"] == 2.125 and isinstance(job["duration_seconds"], float)
     assert registry.recent_events(limit=1)[0]["details"] == {"seconds": 2.125}
+
+
+def test_record_pending_keeps_the_age_of_the_first_attempt(registry):
+    # The client re-asks with the same request_id every few seconds, so a queue
+    # of starving requests must not look brand new on every retry.
+    registry.record_pending("r9", "demo", "wf-9")
+    first = registry.requests.get_item(Key={"request_id": "r9"})["Item"]
+    time.sleep(0.01)
+    registry.record_pending("r9", "demo", "wf-9")
+    again = registry.requests.get_item(Key={"request_id": "r9"})["Item"]
+    assert again["created_at"] == first["created_at"]
+    assert registry.pending_count("demo") == 1
+
+
+def test_recent_events_spills_into_yesterdays_partition(registry):
+    # The partition key is the UTC date, so just after midnight today's
+    # partition is nearly empty and a dashboard reading only it shows nothing.
+    yesterday = to_iso(now() - timedelta(days=1))
+    registry.events.put_item(
+        Item={
+            "day": yesterday[:10],
+            "ts_ulid": f"{yesterday}#old00000",
+            "type": "boot",
+            "actor": "vm-agent",
+            "vm_id": "sbx-a",
+            "message": "yesterday",
+            "details": {},
+            "ttl": epoch_in(3600),
+        }
+    )
+    registry.emit("acquire", "manager", "today", vm_id="sbx-a")
+    messages = [e["message"] for e in registry.recent_events(limit=10)]
+    assert messages == ["today", "yesterday"]
+    assert [e["message"] for e in registry.recent_events(limit=1)] == ["today"]
+    assert now_iso() > yesterday

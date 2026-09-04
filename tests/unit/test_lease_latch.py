@@ -1,11 +1,12 @@
-"""The Lease's lost latch: once a lease is lost, no further VM call is attempted."""
+"""The Lease's lost latch and the retry policy every VM call is made under."""
 
 import pytest
+from temporalio import workflow
 
 from sandbox.client import Timeouts
-from sandbox.client.sandbox import Lease
-from sandbox.contract.errors import LeaseLost
-from sandbox.contract.types import ExecSpec, SandboxLease
+from sandbox.client.sandbox import VM_NON_RETRYABLE, Lease
+from sandbox.contract.errors import HOST_DRAINING, INCOMPATIBLE, LEASE_LOST, LeaseLost
+from sandbox.contract.types import ExecJob, ExecSpec, SandboxLease
 
 SPEC = ExecSpec(job_id="j1", argv=["true"], cwd="/private/tmp/sandbox/wf")
 
@@ -43,3 +44,21 @@ async def test_a_live_lease_gets_past_the_latch():
         await lease.exec_start(SPEC)
     assert not isinstance(caught.value, LeaseLost)
     assert "Not in workflow event loop" in str(caught.value)
+
+
+async def test_vm_calls_are_never_retried_on_the_three_terminal_types(monkeypatch):
+    # HostDraining is the one that used to be missing: retrying it re-queues the
+    # activity on a VM that is shutting down, so the caller waits out a
+    # schedule-to-start timeout instead of being told to acquire another VM.
+    assert VM_NON_RETRYABLE == (LEASE_LOST, INCOMPATIBLE, HOST_DRAINING)
+    seen = {}
+
+    async def fake_execute_activity(name, **kwargs):
+        seen["name"] = name
+        seen["policy"] = kwargs["retry_policy"]
+        return ExecJob(job_id="j1", vm_id="sbx-1", started_at="now")
+
+    monkeypatch.setattr(workflow, "execute_activity", fake_execute_activity)
+    await _lease().exec_start(SPEC)
+    assert seen["policy"].non_retryable_error_types == list(VM_NON_RETRYABLE)
+    assert seen["policy"].maximum_attempts == 3

@@ -107,6 +107,13 @@ class Registry:
         be handed to a second workflow. So the fresh write is conditional, and an
         existing live row gets an update that leaves `protected` and every lease field
         exactly as the lease holder set them.
+
+        A leased row must not have its `state` rewritten either. `booting` plus live
+        lease fields is a row nothing can reach: `claim_idle` will not take it, and
+        `AgentRuntime.start` follows the registration with `idle`, which leaves it
+        invisible to `find_lease_by_request` and to the orphan scan while still
+        holding the lease. So the state change is its own conditional write, and a
+        leased row falls back to updating identity fields only.
         """
         ts = now_iso()
         item = {
@@ -134,24 +141,38 @@ class Registry:
         except ClientError as e:
             if not _is_condition_failure(e):
                 raise
+        identity = (
+            "#pool = :pool, provider_ref = :ref, agent_version = :ver, "
+            "contract_majors = :majors, labels = :labels, "
+            "last_heartbeat_at = :ts, last_transition_at = :ts, reason = :reason"
+        )
+        values = {
+            ":pool": pool,
+            ":ref": provider_ref,
+            ":ver": agent_version,
+            ":majors": list(contract_majors),
+            ":labels": dict(labels or {}),
+            ":ts": ts,
+            ":reason": "re-registered",
+        }
+        try:
+            self.vms.update_item(
+                Key={"vm_id": vm_id},
+                UpdateExpression=f"SET {identity}, #s = :booting",
+                ConditionExpression="attribute_exists(vm_id) AND attribute_not_exists(lease_id)",
+                ExpressionAttributeNames={**_S, **_POOL},
+                ExpressionAttributeValues={**values, ":booting": "booting"},
+            )
+            return self.get_vm(vm_id)
+        except ClientError as e:
+            if not _is_condition_failure(e):
+                raise
         self.vms.update_item(
             Key={"vm_id": vm_id},
-            UpdateExpression=(
-                "SET #pool = :pool, provider_ref = :ref, agent_version = :ver, "
-                "contract_majors = :majors, labels = :labels, #s = :booting, "
-                "last_heartbeat_at = :ts, last_transition_at = :ts, reason = :reason"
-            ),
-            ExpressionAttributeNames={**_S, **_POOL},
-            ExpressionAttributeValues={
-                ":pool": pool,
-                ":ref": provider_ref,
-                ":ver": agent_version,
-                ":majors": list(contract_majors),
-                ":labels": dict(labels or {}),
-                ":booting": "booting",
-                ":ts": ts,
-                ":reason": "re-registered",
-            },
+            UpdateExpression=f"SET {identity}",
+            ConditionExpression="attribute_exists(vm_id)",
+            ExpressionAttributeNames=dict(_POOL),
+            ExpressionAttributeValues=values,
         )
         return self.get_vm(vm_id)
 
@@ -388,29 +409,52 @@ class Registry:
         self.events.put_item(Item=item)
         return item
 
-    def recent_events(self, limit=100):
-        today = now_iso()[:10]
-        items = self.events.query(
+    def _events_on(self, day, limit):
+        return self.events.query(
             KeyConditionExpression="#d = :d",
             ExpressionAttributeNames={"#d": "day"},
-            ExpressionAttributeValues={":d": today},
+            ExpressionAttributeValues={":d": day},
             ScanIndexForward=False,
             Limit=limit,
         ).get("Items", [])
-        return [_clean(i) for i in items]
+
+    def recent_events(self, limit=100):
+        """The newest events, spilling into yesterday's partition when today is thin.
+
+        The partition key is the UTC date, so at 00:05 today's partition holds
+        almost nothing and a dashboard reading only it would show an empty
+        system. Each partition comes back newest-first, so today's rows followed
+        by yesterday's are already in order.
+        """
+        rows = self._events_on(now_iso()[:10], limit)
+        if len(rows) < limit:
+            yesterday = to_iso(now() - timedelta(days=1))[:10]
+            rows.extend(self._events_on(yesterday, limit - len(rows)))
+        return [_clean(i) for i in rows]
 
     # ---- acquire requests -----------------------------------------------------
 
     def record_pending(self, request_id, pool, workflow_id):
-        self.requests.put_item(
-            Item={
-                "request_id": request_id,
-                "pool": pool,
-                "state": "pending",
-                "workflow_id": workflow_id,
-                "created_at": now_iso(),
-                "ttl": epoch_in(24 * 3600),
-            }
+        """Record an unfulfilled acquire, keeping the age of the first attempt.
+
+        The client re-asks with the same request_id every few seconds while it
+        waits for capacity, so a plain put would reset `created_at` on every
+        retry and a queue of starving requests would always look brand new.
+        """
+        self.requests.update_item(
+            Key={"request_id": request_id},
+            UpdateExpression=(
+                "SET #pool = :pool, #s = :pending, workflow_id = :wf, "
+                "created_at = if_not_exists(created_at, :t), #ttl = :ttl"
+            ),
+            ExpressionAttributeNames={**_S, **_POOL, "#ttl": "ttl"},
+            ExpressionAttributeValues={
+                ":pool": pool,
+                ":pending": "pending",
+                ":wf": workflow_id,
+                ":t": now_iso(),
+                ":ttl": epoch_in(24 * 3600),
+            },
         )
 
     def fulfill_request(self, request_id):
