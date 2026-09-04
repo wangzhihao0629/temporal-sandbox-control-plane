@@ -1,4 +1,10 @@
-"""Orchestrator worker entry point."""
+"""Orchestrator worker entry point.
+
+What: connect to Temporal, host the orchestrator's workflows on its queue.
+Why: a separate process from the manager so a manager outage never stalls a
+workflow already mid-turn, and so each queue scales on its own workload.
+Production: the sandbox-orchestrator worker on EKS.
+"""
 
 import asyncio
 import logging

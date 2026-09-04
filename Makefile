@@ -12,3 +12,26 @@ test:
 
 lint:
 	$(UV) run ruff check sandbox tests
+
+.PHONY: up down workers smoke vm vms show
+
+up:
+	./scripts/up.sh
+
+down:
+	./scripts/down.sh
+
+workers:
+	$(UV) run honcho start
+
+smoke:
+	$(UV) run python -m sandbox.orchestrator.run_smoke
+
+vm:
+	$(UV) run python -m sandbox.manager.launch_vm
+
+vms:
+	container ls --all
+
+show:
+	$(UV) run python -m sandbox.registry.show

@@ -1,5 +1,11 @@
 """Start a SmokeWorkflow from the command line and print the result.
 
+What: connect to Temporal, start SmokeWorkflow, print the vm, agent version,
+lease, and the two command outputs it collected.
+Why: a one-shot way to prove the manager and orchestrator workers, and the VM
+they lease, are wired together end to end.
+Production: a CLI or UI action that starts a workflow.
+
 Usage: uv run python -m sandbox.orchestrator.run_smoke
 """
 

@@ -41,6 +41,7 @@ async def test_smoke_workflow_runs_two_commands_on_a_leased_vm(env, aws, workers
         assert result.vm_id == vm.vm_id
         assert result.uname and result.whoami.startswith("uid=")
         assert result.agent_version == "test"
+        assert result.lease_id
         for _ in range(50):
             if registry.get_vm(vm.vm_id)["state"] == "idle":
                 break
