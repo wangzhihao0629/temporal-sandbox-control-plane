@@ -1,6 +1,7 @@
 """The workflow-facing client end to end: lease, exec, failure translation, release."""
 
 import asyncio
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
@@ -8,6 +9,7 @@ import pytest
 from temporalio.client import WorkflowFailureError
 from temporalio.worker import Worker
 
+from sandbox.client import Timeouts
 from sandbox.contract.names import MANAGER_TASK_QUEUE
 from sandbox.manager.activities import ManagerActivities
 from tests.integration.client_workflows import ExerciseParams, ExerciseResult, ExerciseWorkflow
@@ -57,6 +59,15 @@ async def _wait_state(registry, vm_id, state, seconds=5):
     raise AssertionError(f"{vm_id} never reached {state}: {registry.get_vm(vm_id)['state']}")
 
 
+async def _wait_job_started(registry, vm_id, seconds=10):
+    """Block until exec_start has recorded a job row, so a restart lands mid-job."""
+    for _ in range(int(seconds / 0.1)):
+        if registry.list_jobs(vm_id):
+            return
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"{vm_id} never started a job within {seconds}s")
+
+
 async def test_lease_exec_release_round_trip(env, aws, manager, orchestrator, tmp_path):
     registry, store = aws
     vm = await InProcessVm(env.client, registry, store, tmp_path).start()
@@ -101,9 +112,14 @@ async def test_no_capacity_becomes_sandbox_unavailable_after_the_wait(
     env, aws, manager, orchestrator
 ):
     registry, _ = aws
+    started = time.monotonic()
     result = await _run(env, orchestrator, "echo")
+    elapsed = time.monotonic() - started
     assert result.outcome == "unavailable"
     assert registry.pending_count("demo") == 1
+    # Without this the test cannot tell the retry loop from a single-shot
+    # failure: acquire must keep asking until the acquire_wait deadline.
+    assert elapsed >= Timeouts.test().acquire_wait.total_seconds()
 
 
 async def test_exception_inside_the_context_manager_still_releases(
@@ -135,7 +151,7 @@ async def test_wait_reattaches_after_the_vm_worker_restarts(
             id=f"c-long-{uuid.uuid4().hex[:8]}",
             task_queue=orchestrator,
         )
-        await asyncio.sleep(2)
+        await _wait_job_started(registry, vm.vm_id)
         await vm.restart_worker()
         result = await handle.result()
         assert result.outcome == "ok" and result.stdout == "done\n"

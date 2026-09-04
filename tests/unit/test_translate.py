@@ -21,7 +21,12 @@ def _wrap(cause):
 
 
 def test_vm_timeouts_become_lease_lost():
-    for kind in (TimeoutType.SCHEDULE_TO_START, TimeoutType.HEARTBEAT, TimeoutType.START_TO_CLOSE):
+    for kind in (
+        TimeoutType.SCHEDULE_TO_START,
+        TimeoutType.HEARTBEAT,
+        TimeoutType.START_TO_CLOSE,
+        TimeoutType.SCHEDULE_TO_CLOSE,
+    ):
         failure = TimeoutError("t", type=kind, last_heartbeat_details=[])
         assert isinstance(translate(_wrap(failure), vm_call=True), errors.LeaseLost)
 
