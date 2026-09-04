@@ -35,3 +35,8 @@ vms:
 
 show:
 	$(UV) run python -m sandbox.registry.show
+
+.PHONY: image
+
+image:
+	./scripts/build-image.sh
