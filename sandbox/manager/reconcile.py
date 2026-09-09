@@ -32,6 +32,12 @@ _STEP = dict(
     start_to_close_timeout=timedelta(minutes=2),
     retry_policy=RetryPolicy(maximum_attempts=2, initial_interval=timedelta(seconds=1)),
 )
+# Capacity is the only step that starts machines, and starting one is slow. Its
+# budget is one inventory `container ls` plus a launch for every slot the pool
+# can hold: CLI_TIMEOUT_SECONDS + max * LAUNCH_TIMEOUT_SECONDS = 60 + 5 * 180 =
+# 960 seconds. A shorter timeout would let a slow launch outlive its activity,
+# and the retry would then run beside a `container run` that is still going.
+_CAPACITY_STEP = {**_STEP, "start_to_close_timeout": timedelta(minutes=16)}
 
 
 @workflow.defn
@@ -48,7 +54,7 @@ class ReconcileWorkflow:
         )
         actions += await workflow.execute_activity(LEASES, inv, result_type=list[Action], **_STEP)
         actions += await workflow.execute_activity(
-            CAPACITY, params, result_type=list[Action], **_STEP
+            CAPACITY, params, result_type=list[Action], **_CAPACITY_STEP
         )
         counts = await workflow.execute_activity(
             SAMPLE, params, result_type=dict[str, int], **_STEP

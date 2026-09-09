@@ -221,6 +221,32 @@ def test_a_stopped_unknown_instance_needs_no_boot_deadline(registry):
     assert provider.terminated == ["sbx-ghost"]
 
 
+def test_an_unrecognised_instance_state_counts_as_alive(registry):
+    """A provider whose vocabulary changes must not read as a dead fleet.
+
+    Only the states that certainly mean "not coming back" are dead. Anything
+    else is left to the boot deadline and the stale heartbeat, which judge a VM
+    on evidence that does not depend on how the provider words a status.
+    """
+    rec, provider, clock = _make(registry)
+    provider.instances["sbx-ghost"] = ProviderInstance(
+        "sbx-ghost", "sbx-ghost", "unknown", now_iso(), "", ""
+    )
+    _vm(registry, provider, "sbx-a")
+    provider.instances["sbx-a"] = replace(provider.instances["sbx-a"], state="unknown")
+    assert rec.health(rec.inventory("demo")) == []
+    assert provider.terminated == []
+    assert registry.get_vm("sbx-a")["state"] == "idle"
+    # Alive also means it counts: one idle row plus one unregistered instance
+    # cover a floor of two, so nothing is launched.
+    assert rec.capacity(rec.inventory("demo")) == []
+    # The deadlines still reap both, on evidence the provider did not supply.
+    clock.advance(Tunables.local().boot_deadline_seconds + 1)
+    reaped = sorted(a.kind for a in _assert_emitted(registry, rec.health(rec.inventory("demo"))))
+    assert reaped == ["terminate_unknown", "write_off_stale"]
+    assert sorted(provider.terminated) == ["sbx-a", "sbx-ghost"]
+
+
 def test_a_stopped_instance_is_not_spare_capacity(registry):
     rec, provider, _ = _make(registry)
     provider.instances["sbx-ghost"] = ProviderInstance(

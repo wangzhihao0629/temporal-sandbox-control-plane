@@ -6,9 +6,9 @@ Why: the loop that owns the fleet must be readable and unit-testable without
 Temporal or containers. Temporal adds durability and scheduling around it, the
 provider adds machines under it, and neither leaks in. Every decision is an
 Action that also lands in the event feed, so the dashboard can show why a VM
-appeared or disappeared. Only a running instance counts as alive: a stopped one
-answers `list` but runs no agent, so it can neither back a registry row nor
-stand in for capacity. A running instance the provider knows about but no
+appeared or disappeared. An instance the provider reports as stopped is not
+alive: it answers `list` but runs no agent, so it can neither back a registry
+row nor stand in for capacity. A live instance the provider knows about but no
 registry row claims cannot yet be attributed to a pool, so capacity counts every
 unregistered instance toward the pool being reconciled: a single-pool
 simplification, and the reason the unknown-instance check reads the whole
@@ -30,7 +30,12 @@ from sandbox.timeutil import now, parse_iso, to_iso
 log = logging.getLogger(__name__)
 
 NAME_PREFIX = "sbx-"
-RUNNING = "running"  # the one provider-reported instance state that backs a live VM
+# Provider-reported instance states that mean the machine is not coming back.
+# Anything else, an unrecognised state included, is treated as alive: a provider
+# whose vocabulary changes must not be read as a fleet-wide death sentence. A VM
+# that is really gone still gets reaped, by the boot deadline or the stale
+# heartbeat, on evidence that does not depend on the provider's wording.
+DEAD_STATES = frozenset({"stopped", "stopping", "exited", "dead"})
 LIVE_STATES = ("booting", "idle", "leased", "recycling", "draining", "terminating")
 WRITTEN_OFF_STATES = ("terminated", "dead")
 TRANSITION_STATES = ("recycling", "draining", "terminating")
@@ -92,7 +97,7 @@ class Reconciler:
         # One scan, two views: a second `list_vms(pool)` would be a second scan of
         # the same table and could disagree with this one.
         fleet_rows = self.registry.list_vms()
-        rows = [r for r in fleet_rows if r["pool"] == pool]
+        rows = [r for r in fleet_rows if r.get("pool") == pool]
         instances = [asdict(i) for i in self.provider.list() if i.vm_id.startswith(NAME_PREFIX)]
         pending = self.registry.pending_requests(pool)
         return Inventory(
@@ -117,8 +122,8 @@ class Reconciler:
     def health(self, inv: Inventory) -> list[Action]:
         actions: list[Action] = []
         known_refs = {self._ref(r) for r in inv.fleet_rows}
-        live_refs = {i["provider_ref"] for i in inv.instances if i["state"] == RUNNING}
-        stopped_refs = {i["provider_ref"] for i in inv.instances} - live_refs
+        stopped_refs = {i["provider_ref"] for i in inv.instances if i["state"] in DEAD_STATES}
+        live_refs = {i["provider_ref"] for i in inv.instances} - stopped_refs
         live_rows = sum(1 for r in inv.rows if r["state"] in LIVE_STATES)
         # An empty instance list beside live rows is far more likely a provider
         # call that answered wrongly than a fleet that vanished between two
@@ -230,7 +235,7 @@ class Reconciler:
         unregistered = [
             i
             for i in inv.instances
-            if i["provider_ref"] not in known_refs and i["state"] == RUNNING
+            if i["provider_ref"] not in known_refs and i["state"] not in DEAD_STATES
         ]
         idle = [r for r in live if r["state"] == "idle"]
         booting = [r for r in live if r["state"] == "booting"]
@@ -318,7 +323,7 @@ class Reconciler:
         unregistered = sum(
             1
             for i in inv.instances
-            if i["provider_ref"] not in known_refs and i["state"] == RUNNING
+            if i["provider_ref"] not in known_refs and i["state"] not in DEAD_STATES
         )
         by_state = Counter(r["state"] for r in inv.rows)
         counts = {
@@ -344,6 +349,13 @@ class Reconciler:
     # ---- the whole pass -------------------------------------------------------------
 
     def run(self, pool: str, owner_status: OwnerStatus) -> ReconcileReport:
+        """One pass in process: the exact equivalent of one `ReconcileWorkflow` run.
+
+        Same order, same snapshot boundaries: health and leases each read their
+        own inventory, capacity and the request sweep share one taken after
+        them, and the sample reads its own. A test that drives this sees what a
+        scheduled pass would do.
+        """
         actions = self.health(self.inventory(pool))
         actions += self.leases(self.inventory(pool), owner_status)
         inv = self.inventory(pool)
