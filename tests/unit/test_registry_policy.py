@@ -90,6 +90,10 @@ def test_write_off_removes_the_lease_so_the_old_owner_cannot_release(registry):
     assert "ttl" in after and after["reason"] == "instance missing"
     assert registry.release("sbx-a", row["lease_id"], "recycle") is False
     assert registry.write_off("sbx-missing", "x") is False
+    # Writing the same corpse off again must not push its sweep deadline out.
+    assert registry.write_off("sbx-a", "instance stopped") is False
+    assert registry.get_vm("sbx-a")["reason"] == "instance missing"
+    assert registry.get_vm("sbx-a")["last_transition_at"] == after["last_transition_at"]
 
 
 def test_set_state_rejects_unknown_states(registry):

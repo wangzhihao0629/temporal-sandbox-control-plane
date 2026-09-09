@@ -432,6 +432,11 @@ class Registry:
         Removing the lease fields is deliberate: the old owner's `release`
         conditions on `lease_id` and becomes a no-op, so a dead VM can never be
         flipped back to `recycling` by a late caller.
+
+        Writing a VM off twice is a no-op that returns False: the second write
+        would reset `last_transition_at` and the TTL, so a row could be kept out
+        of the sweep forever by a caller that keeps rediscovering it, and every
+        pass would report a fresh write-off for the same corpse.
         """
         try:
             self.vms.update_item(
@@ -440,9 +445,10 @@ class Registry:
                     "SET #s = :s, protected = :false, last_transition_at = :now, "
                     "reason = :reason, #ttl = :ttl REMOVE " + ", ".join(LEASE_FIELDS)
                 ),
-                ConditionExpression="attribute_exists(vm_id)",
+                ConditionExpression="attribute_exists(vm_id) AND #s <> :terminated",
                 ExpressionAttributeNames={**_S, "#ttl": "ttl"},
                 ExpressionAttributeValues={
+                    ":terminated": "terminated",
                     ":s": "terminated",
                     ":false": False,
                     ":now": now_iso(),

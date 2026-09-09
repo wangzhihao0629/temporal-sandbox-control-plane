@@ -19,6 +19,7 @@ class ListProvider:
         self.launched: list[str] = []
         self.terminated: list[str] = []
         self.launch_fails = 0  # raise on this many launches, then behave
+        self.terminate_fails = 0
 
     def launch(self, vm_id, spec: LaunchSpec, env):
         assert spec.image == "img"
@@ -30,6 +31,9 @@ class ListProvider:
         return vm_id
 
     def terminate(self, ref):
+        if self.terminate_fails:
+            self.terminate_fails -= 1
+            raise RuntimeError("provider refused terminate")
         self.terminated.append(ref)
         self.instances.pop(ref, None)
 
@@ -72,6 +76,7 @@ ACTION_KINDS = {
     "write_off_stuck",
     "sweep",
     "orphan",
+    "inventory_suspect",
     "launch",
     "launch_failed",
     "scale_in",
@@ -176,7 +181,10 @@ def test_registered_idle_vms_satisfy_the_floor(registry):
 def test_missing_instance_is_written_off_and_later_swept(registry):
     rec, provider, clock = _make(registry)
     _vm(registry, provider, "sbx-a")
-    _claim(registry, "sbx-a")
+    time.sleep(0.002)  # created_at is millisecond-resolution; keep the order strict
+    # A survivor: an inventory with nothing in it is suspected, not believed.
+    _vm(registry, provider, "sbx-b")
+    assert _claim(registry, "sbx-a")["vm_id"] == "sbx-a", "claim_idle takes the oldest"
     provider.instances.pop("sbx-a")
     actions = _assert_emitted(registry, rec.health(rec.inventory("demo")))
     assert [a.kind for a in actions] == ["write_off_missing"]
@@ -185,7 +193,8 @@ def test_missing_instance_is_written_off_and_later_swept(registry):
     assert rec.health(rec.inventory("demo")) == []
     clock.advance(Tunables.local().sweep_after_seconds + 1)
     swept = _assert_emitted(registry, rec.health(rec.inventory("demo")))
-    assert [a.kind for a in swept] == ["sweep"]
+    # The survivor's heartbeat is ten minutes old on the test clock by now.
+    assert [a.kind for a in swept] == ["sweep", "write_off_stale"]
     assert registry.get_vm("sbx-a") is None
 
 
@@ -237,6 +246,45 @@ def test_stale_boot_and_stuck_rows_are_written_off(registry):
     booted = _assert_emitted(registry, rec.health(rec.inventory("demo")))
     assert [a.kind for a in booted] == ["write_off_boot"]
     assert set(provider.terminated) == {"sbx-idle", "sbx-stuck", "sbx-boot"}
+
+
+def test_an_empty_inventory_is_suspected_rather_than_believed(registry):
+    rec, provider, _ = _make(registry)
+    _vm(registry, provider, "sbx-a")
+    _vm(registry, provider, "sbx-b")
+    provider.instances.clear()
+    actions = _assert_emitted(registry, rec.health(rec.inventory("demo")))
+    assert [(a.kind, a.vm_id) for a in actions] == [("inventory_suspect", "")]
+    assert sorted(r["state"] for r in registry.list_vms("demo")) == ["idle", "idle"]
+    assert provider.terminated == []
+    # A provider that answers again gets believed, one VM at a time.
+    provider.instances["sbx-a"] = ProviderInstance("sbx-a", "sbx-a", "running", now_iso(), "", "")
+    missing = _assert_emitted(registry, rec.health(rec.inventory("demo")))
+    assert [(a.kind, a.vm_id) for a in missing] == [("write_off_missing", "sbx-b")]
+
+
+def test_an_empty_inventory_with_no_live_rows_is_just_an_empty_fleet(registry):
+    rec, provider, clock = _make(registry)
+    _vm(registry, provider, "sbx-a")
+    provider.instances.clear()
+    rec.health(rec.inventory("demo"))  # suspected, so sbx-a is still idle
+    assert registry.set_state("sbx-a", "terminated", expect="idle")
+    # Nothing is live now, so the pass has nothing to protect and sweeps as usual.
+    clock.advance(Tunables.local().sweep_after_seconds + 1)
+    swept = rec.health(rec.inventory("demo"))
+    assert [a.kind for a in swept] == ["sweep"]
+
+
+def test_a_failed_terminate_is_reported_and_the_write_off_still_lands(registry):
+    rec, provider, _ = _make(registry)
+    _vm(registry, provider, "sbx-a")
+    provider.stop("sbx-a")
+    provider.terminate_fails = 1
+    actions = _assert_emitted(registry, rec.health(rec.inventory("demo")))
+    assert [a.kind for a in actions] == ["write_off_stopped"]
+    assert provider.terminated == [], "the provider refused"
+    assert "terminate_failed" in _event_types(registry)
+    assert registry.get_vm("sbx-a")["state"] == "terminated"
 
 
 def test_stuck_transition_is_written_off_even_with_a_fresh_heartbeat(registry):
@@ -420,6 +468,10 @@ def test_every_action_kind_reaches_the_event_feed(registry):
     # abandon: a request that has been pending longer than the deadline.
     registry.record_pending("r1", "demo", "wf")
     step(rec.requests(rec.inventory("demo")))
+
+    # inventory_suspect: the provider answers with nothing while a row is live.
+    provider.instances.clear()
+    step(rec.health(rec.inventory("demo")))
 
     assert seen == ACTION_KINDS
     assert _event_types(registry) >= ACTION_KINDS

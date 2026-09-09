@@ -119,6 +119,16 @@ class Reconciler:
         known_refs = {self._ref(r) for r in inv.fleet_rows}
         live_refs = {i["provider_ref"] for i in inv.instances if i["state"] == RUNNING}
         stopped_refs = {i["provider_ref"] for i in inv.instances} - live_refs
+        live_rows = sum(1 for r in inv.rows if r["state"] in LIVE_STATES)
+        # An empty instance list beside live rows is far more likely a provider
+        # call that answered wrongly than a fleet that vanished between two
+        # passes, and believing it would write off every VM at once. Say so and
+        # skip the missing-instance write-offs; every other check still runs.
+        suspect = not inv.instances and live_rows > 0
+        if suspect:
+            detail = f"provider reported no instances while {live_rows} rows are live"
+            self.registry.emit("inventory_suspect", "reconciler", detail)
+            actions.append(Action("inventory_suspect", "", detail))
 
         for inst in inv.instances:
             ref = inst["provider_ref"]
@@ -159,9 +169,10 @@ class Reconciler:
                 if ref in stopped_refs:
                     self._terminate(ref)
                     self._write_off(vm_id, "instance stopped", "write_off_stopped", actions)
-                else:
+                    continue
+                if not suspect:
                     self._write_off(vm_id, "instance missing", "write_off_missing", actions)
-                continue
+                    continue
             if state == "booting":
                 if self._age(row["created_at"]) > self.t.boot_deadline_seconds:
                     self._terminate(ref)

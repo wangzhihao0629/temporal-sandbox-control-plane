@@ -57,13 +57,17 @@ class ReconcileActivities:
     @activity.defn(name=LEASES)
     async def leases(self, inv: Inventory) -> list[Action]:
         statuses: dict[tuple[str, str], str | None] = {}
+        # The seeding rule below is the reconciler's skip rule, inverted. The
+        # lookup indexes rather than `.get`s, so if the two ever drift the step
+        # fails loudly instead of reading a miss as "owner gone" and releasing a
+        # live lease.
         for row in inv.rows:
-            if row.get("state") == "leased" and row.get("owner_workflow_id"):
+            if row.get("state") == "leased" and "lease_id" in row and row.get("owner_workflow_id"):
                 key = (row["owner_workflow_id"], row.get("owner_run_id", ""))
                 if key not in statuses:
                     statuses[key] = await self._owner_status(*key)
         return await asyncio.to_thread(
-            self.reconciler.leases, inv, lambda wf, run: statuses.get((wf, run))
+            self.reconciler.leases, inv, lambda wf, run: statuses[(wf, run)]
         )
 
     async def _owner_status(self, workflow_id: str, run_id: str) -> str | None:
