@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 
 from sandbox.manager.launch import new_vm_id, vm_environment
 from sandbox.manager.policy import PoolPolicy
+from sandbox.manager.reconcile_types import Action, Inventory, ReconcileReport
 from sandbox.registry.client import Registry
 from sandbox.timeutil import now, parse_iso, to_iso
 
@@ -69,35 +70,6 @@ class Tunables:
         if name not in profiles:
             raise ValueError(f"unknown profile {name!r}")
         return profiles[name]()
-
-
-@dataclass
-class Inventory:
-    """One snapshot. `rows` is the pool being reconciled; `fleet_rows` is every
-    pool's rows, because `provider.list()` is fleet-wide and an instance owned by
-    another pool must not look unknown."""
-
-    pool: str
-    policy: dict
-    rows: list[dict]
-    fleet_rows: list[dict]
-    instances: list[dict]
-    pending: list[dict]
-    taken_at: str
-
-
-@dataclass
-class Action:
-    kind: str
-    vm_id: str
-    detail: str
-
-
-@dataclass
-class ReconcileReport:
-    pool: str
-    counts: dict[str, int]
-    actions: list[Action]
 
 
 class Reconciler:
