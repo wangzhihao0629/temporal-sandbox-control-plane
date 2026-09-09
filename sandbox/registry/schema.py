@@ -3,7 +3,9 @@
 What: names, keys, indexes, and an idempotent create.
 Why: the schema is part of the contract between the manager, the VM agent, and
 the dashboard, so it lives in one file they all import.
-Production: created by Terraform; this function is for local and tests.
+Production: created by Terraform; this function is for local and tests. It
+also enables TTL on `sandbox_vms`, `sandbox_events`, and `sandbox_requests`,
+which Terraform enables for production.
 """
 
 VMS_TABLE = "sandbox_vms"
@@ -92,4 +94,14 @@ def create_tables(resource) -> list[str]:
         table = resource.create_table(TableName=name, BillingMode="PAY_PER_REQUEST", **spec)
         table.wait_until_exists()
         created.append(name)
+
+    ttl_tables = (VMS_TABLE, EVENTS_TABLE, REQUESTS_TABLE)
+    client = resource.meta.client
+    for name in ttl_tables:
+        current = client.describe_time_to_live(TableName=name)["TimeToLiveDescription"]
+        if current.get("TimeToLiveStatus") not in ("ENABLED", "ENABLING"):
+            client.update_time_to_live(
+                TableName=name,
+                TimeToLiveSpecification={"Enabled": True, "AttributeName": "ttl"},
+            )
     return created

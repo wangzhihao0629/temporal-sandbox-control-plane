@@ -22,6 +22,7 @@ from sandbox.registry.schema import (
     JOBS_TABLE,
     POOL_ITEM_PREFIX,
     REQUESTS_TABLE,
+    STATES,
     VMS_TABLE,
 )
 from sandbox.timeutil import epoch_in, now, now_iso, to_iso
@@ -76,6 +77,26 @@ def _to_dynamo(value):
 
 def _is_condition_failure(err: ClientError) -> bool:
     return err.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException"
+
+
+def _scan_all(table, **kwargs) -> list[dict]:
+    items: list[dict] = []
+    while True:
+        page = table.scan(**kwargs)
+        items.extend(page.get("Items", []))
+        if "LastEvaluatedKey" not in page:
+            return items
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+
+def _query_all(table, **kwargs) -> list[dict]:
+    items: list[dict] = []
+    while True:
+        page = table.query(**kwargs)
+        items.extend(page.get("Items", []))
+        if "LastEvaluatedKey" not in page:
+            return items
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
 
 
 class Registry:
@@ -181,14 +202,7 @@ class Registry:
         return _clean(item) if item else None
 
     def list_vms(self, pool=None):
-        rows = []
-        kwargs = {}
-        while True:
-            page = self.vms.scan(**kwargs)
-            rows.extend(page.get("Items", []))
-            if "LastEvaluatedKey" not in page:
-                break
-            kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+        rows = _scan_all(self.vms)
         rows = [r for r in rows if not r["vm_id"].startswith(POOL_ITEM_PREFIX)]
         if pool:
             rows = [r for r in rows if r.get("pool") == pool]
@@ -198,6 +212,8 @@ class Registry:
         self.vms.delete_item(Key={"vm_id": vm_id})
 
     def set_state(self, vm_id, state, *, expect=None, reason="") -> bool:
+        if state not in STATES:
+            raise ValueError(f"unknown state {state!r}")
         expr = "SET #s = :s, last_transition_at = :t, reason = :r"
         values = {":s": state, ":t": now_iso(), ":r": reason}
         names = dict(_S)
@@ -252,12 +268,13 @@ class Registry:
         labels,
     ):
         """Atomically move one idle VM to leased. Returns the row or None."""
-        candidates = self.vms.query(
+        candidates = _query_all(
+            self.vms,
             IndexName="pool_state_index",
             KeyConditionExpression="#pool = :p AND #s = :idle",
             ExpressionAttributeNames={**_S, **_POOL},
             ExpressionAttributeValues={":p": pool, ":idle": "idle"},
-        ).get("Items", [])
+        )
         candidates = [_clean(c) for c in candidates]
         candidates.sort(key=lambda c: c["created_at"])
         wanted = dict(labels or {})
@@ -360,6 +377,90 @@ class Registry:
             if not _is_condition_failure(e):
                 raise
 
+    # ---- pool policy ------------------------------------------------------------
+
+    @staticmethod
+    def policy_key(pool: str) -> str:
+        return f"{POOL_ITEM_PREFIX}{pool}"
+
+    def get_policy(self, pool):
+        item = self.vms.get_item(Key={"vm_id": self.policy_key(pool)}).get("Item")
+        return _clean(item) if item else None
+
+    def put_policy(self, pool, *, min_idle, max, image, cpus=2, memory="2048M"):
+        item = {
+            "vm_id": self.policy_key(pool),
+            "pool": pool,
+            "min_idle": int(min_idle),
+            "max": int(max),
+            "image": image,
+            "cpus": int(cpus),
+            "memory": memory,
+            "updated_at": now_iso(),
+        }
+        self.vms.put_item(Item=item)
+        return item
+
+    def ensure_policy(self, pool, *, min_idle, max, image, cpus=2, memory="2048M"):
+        """Create the pool item if absent; never overwrite an operator's edits."""
+        item = {
+            "vm_id": self.policy_key(pool),
+            "pool": pool,
+            "min_idle": int(min_idle),
+            "max": int(max),
+            "image": image,
+            "cpus": int(cpus),
+            "memory": memory,
+            "updated_at": now_iso(),
+        }
+        try:
+            self.vms.put_item(Item=item, ConditionExpression="attribute_not_exists(vm_id)")
+            return item
+        except ClientError as e:
+            if _is_condition_failure(e):
+                return self.get_policy(pool)
+            raise
+
+    def list_pools(self):
+        rows = _scan_all(
+            self.vms,
+            FilterExpression="begins_with(vm_id, :p)",
+            ExpressionAttributeValues={":p": POOL_ITEM_PREFIX},
+        )
+        return sorted((_clean(r) for r in rows), key=lambda r: r["pool"])
+
+    # ---- write-off ---------------------------------------------------------------
+
+    def write_off(self, vm_id, reason) -> bool:
+        """Declare a VM gone: terminated, unleased, unprotected, with a TTL.
+
+        Removing the lease fields is deliberate: the old owner's `release`
+        conditions on `lease_id` and becomes a no-op, so a dead VM can never be
+        flipped back to `recycling` by a late caller.
+        """
+        try:
+            self.vms.update_item(
+                Key={"vm_id": vm_id},
+                UpdateExpression=(
+                    "SET #s = :s, protected = :false, last_transition_at = :now, "
+                    "reason = :reason, #ttl = :ttl REMOVE " + ", ".join(LEASE_FIELDS)
+                ),
+                ConditionExpression="attribute_exists(vm_id)",
+                ExpressionAttributeNames={**_S, "#ttl": "ttl"},
+                ExpressionAttributeValues={
+                    ":s": "terminated",
+                    ":false": False,
+                    ":now": now_iso(),
+                    ":reason": reason,
+                    ":ttl": epoch_in(3600),
+                },
+            )
+            return True
+        except ClientError as e:
+            if _is_condition_failure(e):
+                return False
+            raise
+
     # ---- jobs ---------------------------------------------------------------
 
     def put_job(self, vm_id, job_id, **fields):
@@ -386,7 +487,7 @@ class Registry:
                 KeyConditionExpression="vm_id = :v", ExpressionAttributeValues={":v": vm_id}
             ).get("Items", [])
         else:
-            items = self.jobs.scan().get("Items", [])
+            items = _scan_all(self.jobs)
         rows = sorted(
             (_clean(i) for i in items), key=lambda r: r.get("updated_at", ""), reverse=True
         )
@@ -432,6 +533,14 @@ class Registry:
             rows.extend(self._events_on(yesterday, limit - len(rows)))
         return [_clean(i) for i in rows]
 
+    # ---- fleet samples -------------------------------------------------------------
+
+    def latest_fleet_sample(self):
+        for event in self.recent_events(limit=200):
+            if event.get("type") == "fleet_sample":
+                return event
+        return None
+
     # ---- acquire requests -----------------------------------------------------
 
     def record_pending(self, request_id, pool, workflow_id):
@@ -470,10 +579,29 @@ class Registry:
             if not _is_condition_failure(e):
                 raise
 
-    def pending_count(self, pool) -> int:
-        items = self.requests.scan(
+    def pending_requests(self, pool):
+        rows = _scan_all(
+            self.requests,
             FilterExpression="#s = :p AND #pool = :pool",
             ExpressionAttributeNames={**_S, **_POOL},
             ExpressionAttributeValues={":p": "pending", ":pool": pool},
-        ).get("Items", [])
-        return len(items)
+        )
+        return sorted((_clean(r) for r in rows), key=lambda r: r["created_at"])
+
+    def abandon_request(self, request_id) -> bool:
+        try:
+            self.requests.update_item(
+                Key={"request_id": request_id},
+                UpdateExpression="SET #s = :a, abandoned_at = :t",
+                ConditionExpression="#s = :p",
+                ExpressionAttributeNames=_S,
+                ExpressionAttributeValues={":a": "abandoned", ":p": "pending", ":t": now_iso()},
+            )
+            return True
+        except ClientError as e:
+            if _is_condition_failure(e):
+                return False
+            raise
+
+    def pending_count(self, pool) -> int:
+        return len(self.pending_requests(pool))

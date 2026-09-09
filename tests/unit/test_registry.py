@@ -195,6 +195,14 @@ def test_record_pending_keeps_the_age_of_the_first_attempt(registry):
     assert registry.pending_count("demo") == 1
 
 
+def test_listing_paginates_past_one_dynamodb_page(registry):
+    for i in range(40):
+        registry.register_vm(
+            f"sbx-{i:03d}", "demo", f"sbx-{i:03d}", "test", [1], {"pad": "x" * 30000}
+        )
+    assert len(registry.list_vms("demo")) == 40
+
+
 def test_recent_events_spills_into_yesterdays_partition(registry):
     # The partition key is the UTC date, so just after midnight today's
     # partition is nearly empty and a dashboard reading only it shows nothing.
