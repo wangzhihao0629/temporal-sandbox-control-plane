@@ -99,6 +99,19 @@ def _query_all(table, **kwargs) -> list[dict]:
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
 
 
+def _policy_item(pool, *, min_idle, max, image, cpus, memory) -> dict:
+    return {
+        "vm_id": f"{POOL_ITEM_PREFIX}{pool}",
+        "pool": pool,
+        "min_idle": int(min_idle),
+        "max": int(max),
+        "image": image,
+        "cpus": int(cpus),
+        "memory": memory,
+        "updated_at": now_iso(),
+    }
+
+
 class Registry:
     def __init__(self, resource):
         self.vms = resource.Table(VMS_TABLE)
@@ -388,31 +401,13 @@ class Registry:
         return _clean(item) if item else None
 
     def put_policy(self, pool, *, min_idle, max, image, cpus=2, memory="2048M"):
-        item = {
-            "vm_id": self.policy_key(pool),
-            "pool": pool,
-            "min_idle": int(min_idle),
-            "max": int(max),
-            "image": image,
-            "cpus": int(cpus),
-            "memory": memory,
-            "updated_at": now_iso(),
-        }
+        item = _policy_item(pool, min_idle=min_idle, max=max, image=image, cpus=cpus, memory=memory)
         self.vms.put_item(Item=item)
         return item
 
     def ensure_policy(self, pool, *, min_idle, max, image, cpus=2, memory="2048M"):
         """Create the pool item if absent; never overwrite an operator's edits."""
-        item = {
-            "vm_id": self.policy_key(pool),
-            "pool": pool,
-            "min_idle": int(min_idle),
-            "max": int(max),
-            "image": image,
-            "cpus": int(cpus),
-            "memory": memory,
-            "updated_at": now_iso(),
-        }
+        item = _policy_item(pool, min_idle=min_idle, max=max, image=image, cpus=cpus, memory=memory)
         try:
             self.vms.put_item(Item=item, ConditionExpression="attribute_not_exists(vm_id)")
             return item
@@ -483,9 +478,11 @@ class Registry:
 
     def list_jobs(self, vm_id=None, limit=50):
         if vm_id:
-            items = self.jobs.query(
-                KeyConditionExpression="vm_id = :v", ExpressionAttributeValues={":v": vm_id}
-            ).get("Items", [])
+            items = _query_all(
+                self.jobs,
+                KeyConditionExpression="vm_id = :v",
+                ExpressionAttributeValues={":v": vm_id},
+            )
         else:
             items = _scan_all(self.jobs)
         rows = sorted(
@@ -536,6 +533,9 @@ class Registry:
     # ---- fleet samples -------------------------------------------------------------
 
     def latest_fleet_sample(self):
+        # Looks back at most 200 events, so a very busy feed can push the last
+        # sample out of the window; treat None as "not in the recent window",
+        # not "never ran".
         for event in self.recent_events(limit=200):
             if event.get("type") == "fleet_sample":
                 return event

@@ -1,9 +1,10 @@
 """Registry: pool policy items, pending requests, write-off, TTL, pagination guards."""
 
+import boto3
 import pytest
 
 from sandbox.manager.policy import PoolPolicy
-from sandbox.registry.schema import REQUESTS_TABLE, VMS_TABLE
+from sandbox.registry.schema import EVENTS_TABLE, REQUESTS_TABLE, VMS_TABLE, create_tables
 
 
 def _idle(registry, vm_id, pool="demo"):
@@ -63,6 +64,13 @@ def test_pending_requests_listing_and_abandon(registry):
     assert registry.pending_count("demo") == 1
 
 
+def test_pending_requests_paginates(registry):
+    for i in range(40):
+        registry.record_pending(f"r{i:03d}", "demo", "x" * 30000)
+    assert len(registry.pending_requests("demo")) == 40
+    assert registry.pending_count("demo") == 40
+
+
 def test_write_off_removes_the_lease_so_the_old_owner_cannot_release(registry):
     _idle(registry, "sbx-a")
     row = registry.claim_idle(
@@ -91,8 +99,11 @@ def test_set_state_rejects_unknown_states(registry):
 
 
 def test_ttl_is_enabled_on_the_tables_that_carry_it(registry):
+    # create_tables must be idempotent: calling it again against existing
+    # tables, with TTL already enabled, must not raise.
+    create_tables(boto3.resource("dynamodb", region_name="us-east-1"))
     client = registry.vms.meta.client
-    for table in (VMS_TABLE, REQUESTS_TABLE):
+    for table in (VMS_TABLE, EVENTS_TABLE, REQUESTS_TABLE):
         status = client.describe_time_to_live(TableName=table)["TimeToLiveDescription"]
         assert status["TimeToLiveStatus"] == "ENABLED" and status["AttributeName"] == "ttl"
 
