@@ -1,10 +1,14 @@
 """Chaos CLI: break a VM the way a host failure would.
 
-Usage: uv run python -m sandbox.manager.chaos {kill|stop|delete} <vm_id>
-kill is a crash, stop is a drain (SIGTERM), delete removes the container
-without warning. Each is recorded as an event with actor `chaos`.
+What: kill is a crash, stop is a drain (SIGTERM), delete removes the
+container without warning. Each is recorded as an event with actor `chaos`.
+Why: the reconciler's stale-heartbeat and missing-instance paths, and the VM
+agent's drain handling, only prove themselves against a real failure — kill
+exercises the first, delete the second, stop the third.
 Production: the equivalents are a host loss, an ASG terminate hook, and
 TerminateInstances.
+
+Usage: uv run python -m sandbox.manager.chaos {kill|stop|delete} <vm_id>
 """
 
 import os

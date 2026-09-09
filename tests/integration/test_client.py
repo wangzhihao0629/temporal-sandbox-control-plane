@@ -13,6 +13,7 @@ from temporalio.worker import Worker
 from sandbox.client import Timeouts
 from sandbox.contract.names import MANAGER_TASK_QUEUE
 from sandbox.manager.activities import ManagerActivities
+from sandbox.testing.stubs import StubProvider
 from tests.integration.client_workflows import ExerciseParams, ExerciseResult, ExerciseWorkflow
 from tests.integration.vmhost import InProcessVm
 
@@ -23,7 +24,7 @@ async def manager(env, aws):
     async with Worker(
         env.client,
         task_queue=MANAGER_TASK_QUEUE,
-        activities=ManagerActivities(registry).all(),
+        activities=ManagerActivities(registry, StubProvider()).all(),
         activity_executor=ThreadPoolExecutor(4),
     ):
         yield
@@ -97,9 +98,7 @@ async def test_non_zero_exit_is_exec_failed_not_lease_lost(
     registry, store = aws
     vm = await InProcessVm(env.client, registry, store, tmp_path).start()
     try:
-        result = await _run(
-            env, orchestrator, "failing", workspace_root=str(vm.workspace_root)
-        )
+        result = await _run(env, orchestrator, "failing", workspace_root=str(vm.workspace_root))
         assert result.outcome == "exec_failed" and result.detail == "exit=2 bad"
     finally:
         await vm.stop()
@@ -138,9 +137,7 @@ async def test_exception_inside_the_context_manager_still_releases(
     vm = await InProcessVm(env.client, registry, store, tmp_path).start()
     try:
         with pytest.raises(WorkflowFailureError):
-            await _run(
-                env, orchestrator, "raise_inside", workspace_root=str(vm.workspace_root)
-            )
+            await _run(env, orchestrator, "raise_inside", workspace_root=str(vm.workspace_root))
         await _wait_state(registry, vm.vm_id, "idle")
     finally:
         await vm.stop()
@@ -154,9 +151,7 @@ async def test_wait_reattaches_after_the_vm_worker_restarts(
     try:
         handle = await env.client.start_workflow(
             ExerciseWorkflow.run,
-            ExerciseParams(
-                scenario="long", sleep_seconds=8, workspace_root=str(vm.workspace_root)
-            ),
+            ExerciseParams(scenario="long", sleep_seconds=8, workspace_root=str(vm.workspace_root)),
             id=f"c-long-{uuid.uuid4().hex[:8]}",
             task_queue=orchestrator,
         )

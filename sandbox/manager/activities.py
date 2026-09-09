@@ -7,7 +7,9 @@ no capacity is a non-retryable NoCapacity that the client turns into a sleep
 loop, and the pending request is recorded so it counts toward scale-out.
 Release is idempotent on the lease id. A recycle only flips the row and the VM
 finishes the wipe itself; a destroy terminates through the provider first, so a
-failed terminate retries with the lease still held.
+failed terminate retries with the lease still held. The provider is required,
+not optional, so a destroy can never silently skip termination and strand a VM
+the registry has already marked gone.
 Production: identical. These run as sync activities in a thread pool because
 boto3 is blocking.
 """
@@ -24,7 +26,7 @@ from sandbox.registry.client import Registry
 
 
 class ManagerActivities:
-    def __init__(self, registry: Registry, provider=None) -> None:
+    def __init__(self, registry: Registry, provider) -> None:
         self.registry = registry
         self.provider = provider
 
@@ -47,6 +49,7 @@ class ManagerActivities:
         info = activity.info()
         existing = self.registry.find_lease_by_request(spec.request_id)
         if existing is not None:
+            self.registry.fulfill_request(spec.request_id)
             return self._lease(existing)
         if spec.contract_major not in SUPPORTED_MAJORS:
             raise Incompatible(
@@ -87,8 +90,7 @@ class ManagerActivities:
             row = self.registry.get_vm(req.vm_id)
             if row is None or row.get("lease_id") != req.lease_id:
                 return
-            if self.provider is not None:
-                self.provider.terminate(row.get("provider_ref", req.vm_id))
+            self.provider.terminate(row.get("provider_ref", req.vm_id))
             if not self.registry.release(req.vm_id, req.lease_id, "destroy"):
                 # Someone else released this lease between the read above and
                 # here. The row belongs to them now; stamping `terminated` on it

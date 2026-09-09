@@ -1,7 +1,13 @@
 """Start a HoldWorkflow and return immediately.
 
+What: start `HoldWorkflow`, which leases a VM and sleeps, and print the
+workflow id and a Temporal UI link.
+Why: a chaos drill needs a lease that outlives a smoke run — `make terminate
+WF=<id>` on the printed id turns it into an orphan for the reconciler to
+reclaim.
+Production: a CLI or UI action that starts a workflow.
+
 Usage: uv run python -m sandbox.orchestrator.run_hold --seconds 120
-Prints the workflow id so `make terminate WF=<id>` can orphan its lease.
 """
 
 import argparse

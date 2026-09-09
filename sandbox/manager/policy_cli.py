@@ -1,10 +1,14 @@
 """Show or edit a pool's policy.
 
+What: with no flags, print the current policy; with `--min-idle`, `--max`, or
+`--image`, merge the change into it and write it back.
+Why: the reconciler reads the policy item on its next pass, so a change here
+takes effect within one interval — the two knobs a demo needs to watch top-up
+and scale-in react without editing the registry by hand.
+Production: the dashboard's policy endpoint does the same write.
+
 Usage: uv run python -m sandbox.manager.policy_cli [--pool demo] [--min-idle N]
     [--max N] [--image I]
-With no flags it prints the current policy. The reconciler reads the item on
-its next pass, so a change takes effect within one interval.
-Production: the dashboard's policy endpoint does the same write.
 """
 
 import argparse

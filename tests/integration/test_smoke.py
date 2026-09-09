@@ -10,6 +10,7 @@ from temporalio.worker import Worker
 from sandbox.contract.names import MANAGER_TASK_QUEUE, ORCHESTRATOR_TASK_QUEUE
 from sandbox.manager.activities import ManagerActivities
 from sandbox.orchestrator.workflows import SmokeParams, SmokeWorkflow
+from sandbox.testing.stubs import StubProvider
 from tests.integration.vmhost import InProcessVm
 
 
@@ -20,7 +21,7 @@ async def workers(env, aws):
         Worker(
             env.client,
             task_queue=MANAGER_TASK_QUEUE,
-            activities=ManagerActivities(registry).all(),
+            activities=ManagerActivities(registry, StubProvider()).all(),
             activity_executor=ThreadPoolExecutor(4),
         ),
         Worker(env.client, task_queue=ORCHESTRATOR_TASK_QUEUE, workflows=[SmokeWorkflow]),

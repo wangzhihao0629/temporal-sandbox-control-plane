@@ -309,6 +309,15 @@ class JobStore:
                     f"job {job_id}: could not check for survivors "
                     f"(pgrep rc={proc.returncode}: {proc.stderr.strip()})"
                 )
+            if proc.stderr.strip():
+                # sudo itself can fail with rc 1 too (e.g. "a password is
+                # required"), indistinguishable from pgrep's own "no match" by
+                # return code alone. Non-empty stderr on rc 1 means the check
+                # never ran, not that nothing is left.
+                raise RuntimeError(
+                    f"job {job_id}: could not check for survivors "
+                    f"(pgrep rc=1: {proc.stderr.strip()})"
+                )
             return False
         try:
             os.killpg(pgid, 0)

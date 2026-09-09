@@ -1,7 +1,8 @@
 """Demo workflows.
 
 What: `SmokeWorkflow`, the smallest possible use of a sandbox: lease a VM, ask
-it to describe itself, run two commands, release.
+it to describe itself, run two commands, release. `HoldWorkflow` leases a VM
+and sleeps, giving the chaos drills a lease that outlives a smoke run.
 Why: the first thing the demo runs and the first thing to check when anything
 else fails. Plan 3 adds `CodingSessionDemoWorkflow` beside it.
 Production: the production coding-agent workflows are the real callers.

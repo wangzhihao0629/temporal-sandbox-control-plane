@@ -276,3 +276,26 @@ def test_unknown_streams_are_refused(store):
         store.log_path("j1", "stdlog")
     with pytest.raises(ValueError):
         store.read_tail("j1", "stdlog")
+
+
+def test_a_sudo_denial_on_pgrep_is_not_an_all_clear(tmp_path, monkeypatch):
+    import subprocess
+
+    from sandbox.vm_agent import jobs as jobs_module
+
+    store = JobStore(tmp_path / "jobs", vm_id="sbx-test", run_as_user="agent")
+
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(
+            argv, 1, stdout="", stderr="sudo: a password is required\n"
+        )
+
+    monkeypatch.setattr(jobs_module.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError):
+        store._survivors("j1", 4242)
+
+    def quiet_no_match(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(jobs_module.subprocess, "run", quiet_no_match)
+    assert store._survivors("j1", 4242) is False

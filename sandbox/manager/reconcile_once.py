@@ -1,7 +1,12 @@
 """Run one reconcile pass now and print what it did.
 
+What: start `ReconcileWorkflow` once, off the schedule, and print its actions
+and counts.
+Why: a demo or a chaos drill needs the reconciler's reaction now, not after
+the interval next fires.
+Production: not deployed; production always runs on the Schedule.
+
 Usage: uv run python -m sandbox.manager.reconcile_once
-Useful when you do not want to wait for the schedule during a demo.
 """
 
 import asyncio

@@ -6,9 +6,10 @@ from temporalio.testing import ActivityEnvironment
 
 from sandbox.contract.types import ReleaseRequest, SandboxSpec
 from sandbox.manager.activities import ManagerActivities
+from sandbox.testing.stubs import StubProvider
 
 
-class FakeProvider:
+class RecordingProvider:
     def __init__(self):
         self.terminated: list[str] = []
 
@@ -16,7 +17,7 @@ class FakeProvider:
         self.terminated.append(ref)
 
 
-class FlakyProvider(FakeProvider):
+class FlakyProvider(RecordingProvider):
     """Fails the first terminate, succeeds after — a provider blip mid-destroy."""
 
     def __init__(self):
@@ -36,7 +37,7 @@ def _idle(registry, vm_id):
 
 
 async def test_acquire_without_capacity_raises_no_capacity_and_records_the_request(registry):
-    acts = ManagerActivities(registry)
+    acts = ManagerActivities(registry, StubProvider())
     with pytest.raises(ApplicationError) as err:
         ActivityEnvironment().run(acts.acquire, SandboxSpec(pool="demo", request_id="r1"))
     assert err.value.type == "NoCapacity"
@@ -46,7 +47,7 @@ async def test_acquire_without_capacity_raises_no_capacity_and_records_the_reque
 
 async def test_acquire_claims_and_is_idempotent_on_request_id(registry):
     _idle(registry, "sbx-a")
-    acts = ManagerActivities(registry)
+    acts = ManagerActivities(registry, StubProvider())
     env = ActivityEnvironment()
     lease = env.run(acts.acquire, SandboxSpec(pool="demo", request_id="r1"))
     assert lease.vm_id == "sbx-a" and lease.task_queue == "sandbox-vm-sbx-a"
@@ -58,7 +59,7 @@ async def test_acquire_claims_and_is_idempotent_on_request_id(registry):
 
 async def test_acquire_rejects_unknown_contract_major(registry):
     _idle(registry, "sbx-a")
-    acts = ManagerActivities(registry)
+    acts = ManagerActivities(registry, StubProvider())
     with pytest.raises(ApplicationError) as err:
         ActivityEnvironment().run(
             acts.acquire, SandboxSpec(pool="demo", request_id="r1", contract_major=99)
@@ -68,7 +69,7 @@ async def test_acquire_rejects_unknown_contract_major(registry):
 
 async def test_release_recycles_idempotently(registry):
     _idle(registry, "sbx-a")
-    acts = ManagerActivities(registry)
+    acts = ManagerActivities(registry, StubProvider())
     env = ActivityEnvironment()
     lease = env.run(acts.acquire, SandboxSpec(pool="demo", request_id="r1"))
     env.run(acts.release, ReleaseRequest(vm_id=lease.vm_id, lease_id=lease.lease_id))
@@ -80,7 +81,7 @@ async def test_release_recycles_idempotently(registry):
 
 async def test_release_destroy_terminates_through_the_provider(registry):
     _idle(registry, "sbx-a")
-    provider = FakeProvider()
+    provider = RecordingProvider()
     acts = ManagerActivities(registry, provider)
     env = ActivityEnvironment()
     lease = env.run(acts.acquire, SandboxSpec(pool="demo", request_id="r1"))
@@ -109,9 +110,28 @@ async def test_release_destroy_keeps_the_lease_when_terminate_fails(registry):
 
 
 async def test_release_rejects_an_unknown_disposition(registry):
-    acts = ManagerActivities(registry)
+    acts = ManagerActivities(registry, StubProvider())
     with pytest.raises(ApplicationError) as err:
         ActivityEnvironment().run(
             acts.release, ReleaseRequest(vm_id="sbx-a", lease_id="l1", disposition="bogus")
         )
     assert err.value.type == "Incompatible"
+
+
+async def test_idempotent_acquire_fulfils_a_pending_request_left_by_a_crash(registry):
+    _idle(registry, "sbx-a")
+    registry.record_pending("r1", "demo", "wf")
+    registry.claim_idle(
+        "demo",
+        lease_id="l",
+        request_id="r1",
+        owner_workflow_id="test",
+        owner_run_id="run",
+        hold_seconds=60,
+        contract_major=1,
+        labels={},
+    )
+    acts = ManagerActivities(registry, StubProvider())
+    lease = ActivityEnvironment().run(acts.acquire, SandboxSpec(pool="demo", request_id="r1"))
+    assert lease.lease_id == "l"
+    assert registry.pending_count("demo") == 0
