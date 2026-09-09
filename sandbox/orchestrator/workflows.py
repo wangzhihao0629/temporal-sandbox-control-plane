@@ -56,3 +56,46 @@ class SmokeWorkflow:
                 whoami=whoami.stdout_tail.strip(),
                 agent_version=info.agent_version,
             )
+
+
+@dataclass
+class HoldParams:
+    seconds: int = 120
+    pool: str = "demo"
+    profile: str = "local"
+    workspace_root: str = WORKSPACE_ROOT
+
+
+@dataclass
+class HoldResult:
+    vm_id: str
+    lease_id: str
+    held_seconds: int
+
+
+@workflow.defn
+class HoldWorkflow:
+    """Lease a VM and hold it for a while.
+
+    The chaos drills need a lease that outlives a smoke: terminate this
+    workflow to create an orphan, or start several to create demand.
+    """
+
+    @workflow.run
+    async def run(self, params: HoldParams) -> HoldResult:
+        sandbox = Sandbox(
+            Timeouts.for_profile(params.profile), workspace_root=params.workspace_root
+        )
+        spec = SandboxSpec(pool=params.pool, request_id=str(workflow.uuid4()))
+        async with sandbox.lease(spec) as vm:
+            await vm.exec(
+                ExecSpec(
+                    job_id=vm.new_job_id(),
+                    argv=["sleep", str(params.seconds)],
+                    cwd=vm.workspace(),
+                    timeout_seconds=params.seconds + 60,
+                )
+            )
+            return HoldResult(
+                vm_id=vm.lease.vm_id, lease_id=vm.lease.lease_id, held_seconds=params.seconds
+            )

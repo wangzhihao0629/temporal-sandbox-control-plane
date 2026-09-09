@@ -15,9 +15,9 @@ from temporalio.worker import Worker
 
 from sandbox import envfile
 from sandbox.contract.names import ORCHESTRATOR_TASK_QUEUE
-from sandbox.orchestrator.workflows import SmokeWorkflow
+from sandbox.orchestrator.workflows import HoldWorkflow, SmokeWorkflow
 
-WORKFLOWS = [SmokeWorkflow]
+WORKFLOWS = [SmokeWorkflow, HoldWorkflow]
 
 
 async def main() -> None:

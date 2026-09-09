@@ -18,6 +18,20 @@ from sandbox.timeutil import now, parse_iso
 def main() -> None:
     envfile.load()
     registry = Registry.from_env()
+    for policy in registry.list_pools():
+        print(
+            f"pool {policy['pool']}: floor {policy['min_idle']}, max {policy['max']}, "
+            f"image {policy['image']}"
+        )
+    sample = registry.latest_fleet_sample()
+    if sample:
+        d = sample["details"]
+        print(
+            f"fleet @ {sample['ts_ulid'][:19]}: total {d.get('total')} idle {d.get('idle')} "
+            f"leased {d.get('leased')} booting {d.get('booting')} draining {d.get('draining')} "
+            f"dead {d.get('dead')} pending {d.get('pending')}"
+        )
+    print()
     rows = registry.list_vms()
     print(f"{'VM':<16}{'STATE':<12}{'HB AGE':<8}{'PROT':<6}{'LEASE':<34}OWNER")
     for row in rows:

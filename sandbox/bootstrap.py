@@ -46,6 +46,16 @@ def main() -> None:
     for bucket in BUCKETS:
         store.ensure_bucket(bucket)
     print(f"buckets ready: {', '.join(BUCKETS)}")
+    policy = Registry.from_env().ensure_policy(
+        os.environ.get("SANDBOX_POOL", "demo"),
+        min_idle=int(os.environ.get("SANDBOX_MIN_IDLE", "2")),
+        max=int(os.environ.get("SANDBOX_MAX", "5")),
+        image=os.environ.get("SANDBOX_VM_IMAGE", "sandbox-vm:dev"),
+    )
+    print(
+        f"pool policy: {policy['pool']} min_idle={policy['min_idle']} "
+        f"max={policy['max']} image={policy['image']}"
+    )
 
 
 if __name__ == "__main__":

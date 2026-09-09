@@ -40,3 +40,31 @@ show:
 
 image:
 	./scripts/build-image.sh
+
+.PHONY: demo chaos-kill chaos-stop chaos-delete policy reconcile hold terminate
+
+SECONDS ?= 120
+
+demo:
+	./scripts/demo.sh
+
+chaos-kill:
+	$(UV) run python -m sandbox.manager.chaos kill $(VM)
+
+chaos-stop:
+	$(UV) run python -m sandbox.manager.chaos stop $(VM)
+
+chaos-delete:
+	$(UV) run python -m sandbox.manager.chaos delete $(VM)
+
+policy:
+	$(UV) run python -m sandbox.manager.policy_cli $(if $(MIN_IDLE),--min-idle $(MIN_IDLE)) $(if $(MAX),--max $(MAX))
+
+reconcile:
+	$(UV) run python -m sandbox.manager.reconcile_once
+
+hold:
+	$(UV) run python -m sandbox.orchestrator.run_hold --seconds $(SECONDS)
+
+terminate:
+	$(UV) run python -m sandbox.orchestrator.terminate $(WF)
