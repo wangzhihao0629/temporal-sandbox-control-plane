@@ -12,6 +12,9 @@ os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 os.environ.pop("AWS_PROFILE", None)
+os.environ.setdefault("VM_TEMPORAL_ADDRESS", "127.0.0.1:7233")
+os.environ.setdefault("DYNAMODB_ENDPOINT", "http://127.0.0.1:5050")
+os.environ.setdefault("S3_ENDPOINT", "http://127.0.0.1:5050")
 
 
 @pytest.fixture
