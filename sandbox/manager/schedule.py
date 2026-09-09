@@ -8,6 +8,7 @@ interval updates the schedule in place.
 Production: the same call from the deployed worker, or Terraform.
 """
 
+import dataclasses
 from datetime import timedelta
 
 from temporalio.client import (
@@ -55,8 +56,11 @@ async def ensure_schedule(client: Client, pool: str, interval_seconds: int, prof
     except ScheduleAlreadyRunningError:
         handle = client.get_schedule_handle(schedule_id)
 
-        async def _update(_: ScheduleUpdateInput) -> ScheduleUpdate:
-            return ScheduleUpdate(schedule=desired)
+        async def _update(inp: ScheduleUpdateInput) -> ScheduleUpdate:
+            # Carry the live state across: a default ScheduleState would un-pause a
+            # schedule an operator paused and drop the note saying why.
+            state = inp.description.schedule.state
+            return ScheduleUpdate(schedule=dataclasses.replace(desired, state=state))
 
         await handle.update(_update)
     return schedule_id

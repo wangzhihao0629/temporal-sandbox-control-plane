@@ -56,7 +56,7 @@ class ReconcileActivities:
     async def leases(self, inv: Inventory) -> list[Action]:
         statuses: dict[tuple[str, str], str | None] = {}
         for row in inv.rows:
-            if row.get("state") == "leased" and "owner_workflow_id" in row:
+            if row.get("state") == "leased" and row.get("owner_workflow_id"):
                 key = (row["owner_workflow_id"], row.get("owner_run_id", ""))
                 if key not in statuses:
                     statuses[key] = await self._owner_status(*key)

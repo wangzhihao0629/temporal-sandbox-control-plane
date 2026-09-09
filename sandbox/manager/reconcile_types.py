@@ -22,6 +22,8 @@ SAMPLE = ACTIVITY_PREFIX + "sample"
 @dataclass
 class ReconcileParams:
     pool: str = "demo"
+    # Descriptive only: the worker picks its tunables from SANDBOX_PROFILE when it
+    # constructs the Reconciler, so changing this on a run changes nothing.
     profile: str = "local"
 
 

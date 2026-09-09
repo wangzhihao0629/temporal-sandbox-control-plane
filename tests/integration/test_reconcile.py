@@ -4,6 +4,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from temporalio.client import ScheduleOverlapPolicy
 from temporalio.worker import Worker
 
 from sandbox.contract.names import MANAGER_TASK_QUEUE
@@ -14,6 +15,7 @@ from sandbox.manager.reconcile_activities import ReconcileActivities
 from sandbox.manager.reconcile_types import ReconcileParams
 from sandbox.manager.reconciler import Reconciler, Tunables
 from sandbox.manager.schedule import ensure_schedule
+from tests.integration.client_workflows import ExerciseParams, ExerciseWorkflow
 
 
 @pytest.fixture
@@ -109,27 +111,47 @@ async def test_an_orphaned_lease_is_released_and_the_vm_recycled(env, fleet):
 
 
 async def test_a_running_owner_keeps_its_lease(env, fleet):
+    """A lease survives a pass while its owner runs, and is released once it ends.
+
+    The stand-in owner is a real long-running workflow rather than another
+    reconcile pass, which finishes inside the pass that is meant to observe it.
+    The row is claimed in the probe's name *before* the probe starts, with an
+    empty run id so the status lookup resolves whatever run is current: that
+    leaves exactly one idle VM, so the test knows which VM the probe will
+    acquire and can hand it that VM's workspace root.
+    """
     registry, provider = fleet
     await _reconcile(env)
     await _wait(lambda: _states(registry) == ["idle", "idle"])
-    handle = await env.client.start_workflow(
-        ReconcileWorkflow.run,
-        ReconcileParams(pool="demo", profile="test"),
-        id="reconcile-owner-probe",
-        task_queue=MANAGER_TASK_QUEUE,
-    )
-    # Use this running workflow as a stand-in owner: claim a row in its name.
     row = registry.claim_idle(
         "demo",
         lease_id="held",
         request_id="r-held",
         owner_workflow_id="reconcile-owner-probe",
-        owner_run_id=handle.result_run_id or "",
+        owner_run_id="",
         hold_seconds=600,
         contract_major=1,
         labels={},
     )
-    await handle.result()
+    spare = next(r for r in registry.list_vms("demo") if r["state"] == "idle")
+    async with Worker(
+        env.client, task_queue="test-reconcile-owner", workflows=[ExerciseWorkflow]
+    ):
+        handle = await env.client.start_workflow(
+            ExerciseWorkflow.run,
+            ExerciseParams(
+                scenario="long",
+                sleep_seconds=8,
+                workspace_root=str(provider.vms[spare["vm_id"]].workspace_root),
+            ),
+            id="reconcile-owner-probe",
+            task_queue="test-reconcile-owner",
+        )
+        await _wait(lambda: registry.get_vm(spare["vm_id"])["state"] == "leased")
+        report = await _reconcile(env)
+        assert [a for a in report.actions if a.kind == "orphan"] == []
+        assert registry.get_vm(row["vm_id"])["state"] == "leased"
+        assert (await handle.result()).outcome == "ok"
     # The probe has now finished, so the lease it "held" is orphaned on the next pass.
     report = await _reconcile(env)
     assert any(a.kind == "orphan" and a.vm_id == row["vm_id"] for a in report.actions)
@@ -162,8 +184,16 @@ async def test_stale_pending_requests_are_abandoned(env, fleet):
 async def test_ensure_schedule_is_idempotent(env):
     schedule_id = await ensure_schedule(env.client, "demo", 30, "test")
     assert schedule_id == "sandbox-reconcile-demo"
-    assert await ensure_schedule(env.client, "demo", 45, "test") == schedule_id
     handle = env.client.get_schedule_handle(schedule_id)
-    desc = await handle.describe()
-    assert desc.schedule.spec.intervals[0].every.total_seconds() == 45
-    await handle.delete()
+    try:
+        await handle.pause(note="drill")
+        assert await ensure_schedule(env.client, "demo", 45, "test") == schedule_id
+        desc = await handle.describe()
+        assert desc.schedule.spec.intervals[0].every.total_seconds() == 45
+        assert desc.schedule.policy.overlap == ScheduleOverlapPolicy.SKIP
+        assert desc.schedule.action.id == "reconcile-demo"
+        assert desc.schedule.action.task_queue == MANAGER_TASK_QUEUE
+        assert desc.schedule.state.paused is True
+        assert desc.schedule.state.note == "drill"
+    finally:
+        await handle.delete()
