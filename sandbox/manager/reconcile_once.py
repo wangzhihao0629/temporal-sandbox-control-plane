@@ -54,7 +54,7 @@ async def run_once(client: Client, pool: str) -> ReconcileReport:
     latest = None
     for _ in range(int(WAIT_SECONDS / POLL_SECONDS)):
         latest = await _latest_action(handle)
-        if _run_id(latest) != before:
+        if latest is not None and _run_id(latest) != before:
             break
         await asyncio.sleep(POLL_SECONDS)
     else:
