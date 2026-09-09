@@ -1,7 +1,7 @@
 """Reconciler: each step of spec 6.6 against moto and a list-backed provider."""
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 import pytest
@@ -40,10 +40,16 @@ class ListProvider:
         return self.instances.get(ref)
 
     def kill(self, ref):
-        self.instances.pop(ref, None)
+        self._stop(ref)
 
     def stop(self, ref):
-        self.instances.pop(ref, None)
+        self._stop(ref)
+
+    def _stop(self, ref):
+        # Like a real provider: a killed or stopped instance is still listed.
+        inst = self.instances.get(ref)
+        if inst is not None:
+            self.instances[ref] = replace(inst, state="stopped")
 
 
 @dataclass
@@ -60,6 +66,7 @@ class FakeClock:
 ACTION_KINDS = {
     "terminate_unknown",
     "write_off_missing",
+    "write_off_stopped",
     "write_off_boot",
     "write_off_stale",
     "write_off_stuck",
@@ -180,6 +187,40 @@ def test_missing_instance_is_written_off_and_later_swept(registry):
     swept = _assert_emitted(registry, rec.health(rec.inventory("demo")))
     assert [a.kind for a in swept] == ["sweep"]
     assert registry.get_vm("sbx-a") is None
+
+
+def test_a_stopped_instance_is_written_off_and_reaped(registry):
+    rec, provider, _ = _make(registry)
+    _vm(registry, provider, "sbx-a")
+    provider.stop("sbx-a")
+    actions = _assert_emitted(registry, rec.health(rec.inventory("demo")))
+    assert [(a.kind, a.detail) for a in actions] == [("write_off_stopped", "instance stopped")]
+    assert registry.get_vm("sbx-a")["state"] == "terminated"
+    assert provider.terminated == ["sbx-a"], "a stopped instance is reaped, not just written off"
+
+
+def test_a_stopped_unknown_instance_needs_no_boot_deadline(registry):
+    rec, provider, _ = _make(registry)
+    provider.instances["sbx-ghost"] = ProviderInstance(
+        "sbx-ghost", "sbx-ghost", "stopped", now_iso(), "", ""
+    )
+    # Nothing is going to register it, so waiting out the deadline buys nothing.
+    actions = _assert_emitted(registry, rec.health(rec.inventory("demo")))
+    assert [(a.kind, a.detail) for a in actions] == [
+        ("terminate_unknown", "stopped instance without a registry row")
+    ]
+    assert provider.terminated == ["sbx-ghost"]
+
+
+def test_a_stopped_instance_is_not_spare_capacity(registry):
+    rec, provider, _ = _make(registry)
+    provider.instances["sbx-ghost"] = ProviderInstance(
+        "sbx-ghost", "sbx-ghost", "stopped", now_iso(), "", ""
+    )
+    # A running unregistered instance counts as booting; a stopped one counts as nothing.
+    assert [a.kind for a in rec.capacity(rec.inventory("demo"))] == ["launch", "launch"]
+    counts = rec.sample("demo")
+    assert counts["booting"] == 2 and counts["total"] == 2
 
 
 def test_stale_boot_and_stuck_rows_are_written_off(registry):
@@ -352,6 +393,11 @@ def test_every_action_kind_reaches_the_event_feed(registry):
     # write_off_missing: a registered VM whose instance vanished.
     _vm(registry, provider, "sbx-b")
     provider.instances.pop("sbx-b")
+    step(rec.health(rec.inventory("demo")))
+
+    # write_off_stopped: a registered VM whose instance is present but not running.
+    _vm(registry, provider, "sbx-s")
+    provider.stop("sbx-s")
     step(rec.health(rec.inventory("demo")))
 
     # One pass past every deadline: the launched-but-unregistered VM is unknown,

@@ -13,7 +13,7 @@ async def provider(env, aws, tmp_path):
     registry, store = aws
     provider = FakeProvider(asyncio.get_running_loop(), env.client, registry, store, tmp_path)
     yield provider
-    for provider_ref in list(provider.vms):
+    for provider_ref in [*provider.vms, *provider.stopped]:
         await asyncio.to_thread(provider.terminate, provider_ref)
 
 
@@ -44,18 +44,27 @@ async def test_kill_leaves_the_row_behind_like_a_real_crash(provider, aws):
     await asyncio.to_thread(provider.launch, "sbx-fake2", LaunchSpec(image="x"), {})
     await _settle(registry, "sbx-fake2", "idle")
     await asyncio.to_thread(provider.kill, "sbx-fake2")
-    assert provider.list() == []
+    # The instance is still there, like a crashed EC2 instance: stopped, not gone.
+    assert [(i.vm_id, i.state) for i in provider.list()] == [("sbx-fake2", "stopped")]
+    assert provider.describe("sbx-fake2").state == "stopped"
     assert registry.get_vm("sbx-fake2")["state"] == "idle", "a crash writes nothing"
-    # Two heartbeat intervals with nothing left alive to write one.
+    # A heartbeat already in flight when the crash landed may still write one row,
+    # so the baseline is read after it, not before.
+    await asyncio.sleep(0.1)
     beat = registry.get_vm("sbx-fake2")["last_heartbeat_at"]
+    # Two heartbeat intervals with nothing left alive to write one.
     await asyncio.sleep(1.2)
     assert registry.get_vm("sbx-fake2")["last_heartbeat_at"] == beat
+    await asyncio.to_thread(provider.terminate, "sbx-fake2")
+    assert provider.list() == [] and provider.describe("sbx-fake2") is None
 
 
-async def test_stop_drains_and_the_instance_disappears(provider, aws):
+async def test_stop_drains_and_the_instance_stays_until_terminated(provider, aws):
     registry, _ = aws
     await asyncio.to_thread(provider.launch, "sbx-fake3", LaunchSpec(image="x"), {})
     await _settle(registry, "sbx-fake3", "idle")
     await asyncio.to_thread(provider.stop, "sbx-fake3")
-    assert provider.list() == []
+    assert [(i.vm_id, i.state) for i in provider.list()] == [("sbx-fake3", "stopped")]
     assert registry.get_vm("sbx-fake3")["state"] == "terminated"
+    await asyncio.to_thread(provider.terminate, "sbx-fake3")
+    assert provider.list() == []

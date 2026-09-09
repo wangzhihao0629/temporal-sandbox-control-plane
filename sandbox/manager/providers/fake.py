@@ -1,12 +1,16 @@
 """A provider whose VMs are in-process agents.
 
-What: launch starts an `InProcessVm` on the event loop; terminate stops it;
-kill crashes it, which initiates no registry write; stop drains it; list and describe
-report what is still running.
+What: launch starts an `InProcessVm` on the event loop; terminate stops it and
+forgets it; kill crashes it, which initiates no registry write; stop drains it;
+list and describe report both the running VMs and the ones that were killed or
+drained, as `running` and `stopped`.
 Why: the reconciler's whole loop, top-up from zero, dead-VM write-off, orphan
 release, scale-in, runs against a real Temporal dev server and the real
 `AgentRuntime` in a test that takes seconds, with no containers.
-Production: never used. The EC2 provider takes this seat.
+Production: never used. The EC2 provider takes this seat. A killed instance
+lingers in `stopped` for the same reason a crashed EC2 instance keeps answering
+DescribeInstances: only a terminate removes it, and the reconciler has to be
+able to tell "stopped" from "gone".
 
 Threading: the manager runs providers from sync activities in a thread pool, so
 every method here blocks on the loop with `run_coroutine_threadsafe`. Calling
@@ -32,6 +36,7 @@ class FakeProvider:
         self.root = Path(root)
         self.pool = pool
         self.vms: dict[str, InProcessVm] = {}
+        self.stopped: dict[str, InProcessVm] = {}
         self.launched: list[str] = []
         self.terminated: list[str] = []
 
@@ -39,12 +44,12 @@ class FakeProvider:
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout)
 
     def _call(self, coro, what: str, provider_ref: str) -> None:
-        """Run a teardown coroutine. The instance is already gone from `self.vms`.
+        """Run a teardown coroutine. The bookkeeping has already moved on.
 
-        A real provider's terminate is fire and forget: the instance does not
-        come back because the API call failed. Re-inserting it would leave the
-        reconciler chasing a VM nobody can stop, so a failure is logged and the
-        bookkeeping stands.
+        A real provider's teardown is fire and forget: the instance does not go
+        back to running because the API call failed. Putting it back would leave
+        the reconciler chasing a VM nobody can stop, so a failure is logged and
+        the bookkeeping stands.
         """
         try:
             self._run(coro)
@@ -73,34 +78,42 @@ class FakeProvider:
 
     def terminate(self, provider_ref: str) -> None:
         self.terminated.append(provider_ref)
-        vm = self.vms.pop(provider_ref, None)
+        vm = self.vms.pop(provider_ref, None) or self.stopped.pop(provider_ref, None)
         if vm is not None:
             self._call(vm.stop(), "terminate", provider_ref)
 
     def list(self) -> list[ProviderInstance]:
-        # A snapshot: terminate and kill mutate self.vms from other threads.
-        return [self._instance(vm) for vm in list(self.vms.values())]
+        # A snapshot: terminate, kill, and stop mutate both dicts from other threads.
+        running = [self._instance(vm, "running") for vm in list(self.vms.values())]
+        return running + [self._instance(vm, "stopped") for vm in list(self.stopped.values())]
 
     def describe(self, provider_ref: str) -> ProviderInstance | None:
         vm = self.vms.get(provider_ref)
-        return self._instance(vm) if vm else None
+        if vm is not None:
+            return self._instance(vm, "running")
+        vm = self.stopped.get(provider_ref)
+        return self._instance(vm, "stopped") if vm is not None else None
 
     def kill(self, provider_ref: str) -> None:
-        vm = self.vms.pop(provider_ref, None)
-        if vm is not None:
-            self._call(vm.runtime.crash(), "kill", provider_ref)
+        self._park(provider_ref, "kill", lambda vm: vm.runtime.crash())
 
     def stop(self, provider_ref: str) -> None:
+        self._park(provider_ref, "stop", lambda vm: vm.runtime.drain())
+
+    def _park(self, provider_ref: str, what: str, teardown) -> None:
+        """Crash or drain the VM, and leave the instance behind as stopped."""
         vm = self.vms.pop(provider_ref, None)
-        if vm is not None:
-            self._call(vm.runtime.drain(), "stop", provider_ref)
+        if vm is None:
+            return
+        self.stopped[provider_ref] = vm
+        self._call(teardown(vm), what, provider_ref)
 
     @staticmethod
-    def _instance(vm: InProcessVm) -> ProviderInstance:
+    def _instance(vm: InProcessVm, state: str) -> ProviderInstance:
         return ProviderInstance(
             provider_ref=vm.vm_id,
             vm_id=vm.vm_id,
-            state="running",
+            state=state,
             created_at=vm.started_at,
             address="",
             gateway="",

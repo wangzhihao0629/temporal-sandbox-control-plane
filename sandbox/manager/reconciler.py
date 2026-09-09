@@ -6,8 +6,10 @@ Why: the loop that owns the fleet must be readable and unit-testable without
 Temporal or containers. Temporal adds durability and scheduling around it, the
 provider adds machines under it, and neither leaks in. Every decision is an
 Action that also lands in the event feed, so the dashboard can show why a VM
-appeared or disappeared. An instance the provider knows about but no registry
-row claims cannot yet be attributed to a pool, so capacity counts every
+appeared or disappeared. Only a running instance counts as alive: a stopped one
+answers `list` but runs no agent, so it can neither back a registry row nor
+stand in for capacity. A running instance the provider knows about but no
+registry row claims cannot yet be attributed to a pool, so capacity counts every
 unregistered instance toward the pool being reconciled: a single-pool
 simplification, and the reason the unknown-instance check reads the whole
 fleet's rows rather than one pool's.
@@ -28,6 +30,7 @@ from sandbox.timeutil import now, parse_iso, to_iso
 log = logging.getLogger(__name__)
 
 NAME_PREFIX = "sbx-"
+RUNNING = "running"  # the one provider-reported instance state that backs a live VM
 LIVE_STATES = ("booting", "idle", "leased", "recycling", "draining", "terminating")
 WRITTEN_OFF_STATES = ("terminated", "dead")
 TRANSITION_STATES = ("recycling", "draining", "terminating")
@@ -114,21 +117,33 @@ class Reconciler:
     def health(self, inv: Inventory) -> list[Action]:
         actions: list[Action] = []
         known_refs = {self._ref(r) for r in inv.fleet_rows}
-        live_refs = {i["provider_ref"] for i in inv.instances}
+        live_refs = {i["provider_ref"] for i in inv.instances if i["state"] == RUNNING}
+        stopped_refs = {i["provider_ref"] for i in inv.instances} - live_refs
 
         for inst in inv.instances:
-            if inst["provider_ref"] in known_refs:
+            ref = inst["provider_ref"]
+            if ref in known_refs:
                 continue
-            if inst["created_at"] and self._age(inst["created_at"]) > self.t.boot_deadline_seconds:
-                detail = "no registry row past the boot deadline"
-                self._terminate(inst["provider_ref"])
-                self.registry.emit(
-                    "terminate_unknown",
-                    "reconciler",
-                    f"terminated {inst['vm_id']}: {detail}",
-                    vm_id=inst["vm_id"],
-                )
-                actions.append(Action("terminate_unknown", inst["vm_id"], detail))
+            # A stopped orphan needs no deadline: nothing is going to register it.
+            stopped = ref in stopped_refs
+            aged = bool(inst["created_at"]) and (
+                self._age(inst["created_at"]) > self.t.boot_deadline_seconds
+            )
+            if not (stopped or aged):
+                continue
+            detail = (
+                "stopped instance without a registry row"
+                if stopped
+                else "no registry row past the boot deadline"
+            )
+            self._terminate(ref)
+            self.registry.emit(
+                "terminate_unknown",
+                "reconciler",
+                f"terminated {inst['vm_id']}: {detail}",
+                vm_id=inst["vm_id"],
+            )
+            actions.append(Action("terminate_unknown", inst["vm_id"], detail))
 
         for row in inv.rows:
             vm_id, state, ref = row["vm_id"], row["state"], self._ref(row)
@@ -141,7 +156,11 @@ class Reconciler:
                     actions.append(Action("sweep", vm_id, f"{state} row swept"))
                 continue
             if ref not in live_refs:
-                self._write_off(vm_id, "instance missing", "write_off_missing", actions)
+                if ref in stopped_refs:
+                    self._terminate(ref)
+                    self._write_off(vm_id, "instance stopped", "write_off_stopped", actions)
+                else:
+                    self._write_off(vm_id, "instance missing", "write_off_missing", actions)
                 continue
             if state == "booting":
                 if self._age(row["created_at"]) > self.t.boot_deadline_seconds:
@@ -197,7 +216,11 @@ class Reconciler:
         policy = PoolPolicy.from_row(inv.policy)
         live = [r for r in inv.rows if r["state"] in LIVE_STATES]
         known_refs = {self._ref(r) for r in inv.fleet_rows}
-        unregistered = [i for i in inv.instances if i["provider_ref"] not in known_refs]
+        unregistered = [
+            i
+            for i in inv.instances
+            if i["provider_ref"] not in known_refs and i["state"] == RUNNING
+        ]
         idle = [r for r in live if r["state"] == "idle"]
         booting = [r for r in live if r["state"] == "booting"]
         total = len(live) + len(unregistered)
@@ -281,7 +304,11 @@ class Reconciler:
         inv = self.inventory(pool)
         policy = PoolPolicy.from_row(inv.policy)
         known_refs = {self._ref(r) for r in inv.fleet_rows}
-        unregistered = sum(1 for i in inv.instances if i["provider_ref"] not in known_refs)
+        unregistered = sum(
+            1
+            for i in inv.instances
+            if i["provider_ref"] not in known_refs and i["state"] == RUNNING
+        )
         by_state = Counter(r["state"] for r in inv.rows)
         counts = {
             "total": sum(by_state[s] for s in LIVE_STATES) + unregistered,

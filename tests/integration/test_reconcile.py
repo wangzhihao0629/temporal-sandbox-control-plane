@@ -35,7 +35,7 @@ async def fleet(env, aws, tmp_path):
         activity_executor=ThreadPoolExecutor(8),
     ):
         yield registry, provider
-    for vm_id in list(provider.vms):
+    for vm_id in [*provider.vms, *provider.stopped]:
         await asyncio.to_thread(provider.terminate, vm_id)
 
 
@@ -82,8 +82,11 @@ async def test_a_crashed_vm_is_written_off_and_replaced(env, fleet):
     await asyncio.to_thread(provider.kill, victim)
     report = await _reconcile(env)
     kinds = [a.kind for a in report.actions]
-    assert "write_off_missing" in kinds and kinds.count("launch") == 1
+    # The crashed instance is still listed, stopped, so it is written off as stopped
+    # rather than missing, and the same pass reaps it.
+    assert "write_off_stopped" in kinds and kinds.count("launch") == 1
     assert registry.get_vm(victim)["state"] == "terminated"
+    assert victim in provider.terminated
     await _wait(lambda: _states(registry).count("idle") == 2)
     await asyncio.sleep(Tunables.test().sweep_after_seconds + 0.5)
     report = await _reconcile(env)
