@@ -6,7 +6,11 @@ Why: the loop that owns the fleet must be readable and unit-testable without
 Temporal or containers. Temporal adds durability and scheduling around it, the
 provider adds machines under it, and neither leaks in. Every decision is an
 Action that also lands in the event feed, so the dashboard can show why a VM
-appeared or disappeared.
+appeared or disappeared. An instance the provider knows about but no registry
+row claims cannot yet be attributed to a pool, so capacity counts every
+unregistered instance toward the pool being reconciled: a single-pool
+simplification, and the reason the unknown-instance check reads the whole
+fleet's rows rather than one pool's.
 Production: identical; the tunables grow and the provider is EC2.
 """
 
@@ -18,7 +22,7 @@ from dataclasses import asdict, dataclass
 from sandbox.manager.launch import new_vm_id, vm_environment
 from sandbox.manager.policy import PoolPolicy
 from sandbox.registry.client import Registry
-from sandbox.timeutil import now, now_iso, parse_iso
+from sandbox.timeutil import now, parse_iso, to_iso
 
 log = logging.getLogger(__name__)
 
@@ -61,14 +65,22 @@ class Tunables:
 
     @classmethod
     def for_profile(cls, name: str) -> "Tunables":
-        return {"local": cls.local, "prod": cls.prod, "test": cls.test}[name]()
+        profiles = {"local": cls.local, "prod": cls.prod, "test": cls.test}
+        if name not in profiles:
+            raise ValueError(f"unknown profile {name!r}")
+        return profiles[name]()
 
 
 @dataclass
 class Inventory:
+    """One snapshot. `rows` is the pool being reconciled; `fleet_rows` is every
+    pool's rows, because `provider.list()` is fleet-wide and an instance owned by
+    another pool must not look unknown."""
+
     pool: str
     policy: dict
     rows: list[dict]
+    fleet_rows: list[dict]
     instances: list[dict]
     pending: list[dict]
     taken_at: str
@@ -103,9 +115,18 @@ class Reconciler:
         if policy is None:
             raise RuntimeError(f"pool {pool!r} has no policy item; run sandbox.bootstrap")
         rows = self.registry.list_vms(pool)
+        fleet_rows = self.registry.list_vms()
         instances = [asdict(i) for i in self.provider.list() if i.vm_id.startswith(NAME_PREFIX)]
         pending = self.registry.pending_requests(pool)
-        return Inventory(pool, policy, rows, instances, pending, now_iso())
+        return Inventory(
+            pool=pool,
+            policy=policy,
+            rows=rows,
+            fleet_rows=fleet_rows,
+            instances=instances,
+            pending=pending,
+            taken_at=to_iso(self.clock()),
+        )
 
     def _age(self, iso: str) -> float:
         return (self.clock() - parse_iso(iso)).total_seconds()
@@ -118,27 +139,31 @@ class Reconciler:
 
     def health(self, inv: Inventory) -> list[Action]:
         actions: list[Action] = []
-        known_refs = {self._ref(r) for r in inv.rows}
+        known_refs = {self._ref(r) for r in inv.fleet_rows}
         live_refs = {i["provider_ref"] for i in inv.instances}
 
         for inst in inv.instances:
             if inst["provider_ref"] in known_refs:
                 continue
             if inst["created_at"] and self._age(inst["created_at"]) > self.t.boot_deadline_seconds:
+                detail = "no registry row past the boot deadline"
                 self._terminate(inst["provider_ref"])
-                actions.append(
-                    Action(
-                        "terminate_unknown",
-                        inst["vm_id"],
-                        "no registry row past the boot deadline",
-                    )
+                self.registry.emit(
+                    "terminate_unknown",
+                    "reconciler",
+                    f"terminated {inst['vm_id']}: {detail}",
+                    vm_id=inst["vm_id"],
                 )
+                actions.append(Action("terminate_unknown", inst["vm_id"], detail))
 
         for row in inv.rows:
             vm_id, state, ref = row["vm_id"], row["state"], self._ref(row)
             if state in WRITTEN_OFF_STATES:
                 if self._age(row["last_transition_at"]) > self.t.sweep_after_seconds:
                     self.registry.delete_vm(vm_id)
+                    self.registry.emit(
+                        "sweep", "reconciler", f"{vm_id}: {state} row swept", vm_id=vm_id
+                    )
                     actions.append(Action("sweep", vm_id, f"{state} row swept"))
                 continue
             if ref not in live_refs:
@@ -167,7 +192,11 @@ class Reconciler:
         for row in inv.rows:
             if row["state"] != "leased" or "lease_id" not in row:
                 continue
-            status = owner_status(row["owner_workflow_id"], row.get("owner_run_id", ""))
+            owner = row.get("owner_workflow_id")
+            if not owner:
+                log.warning("leased row %s has no owner_workflow_id; skipping", row["vm_id"])
+                continue
+            status = owner_status(owner, row.get("owner_run_id", ""))
             expired = bool(row.get("lease_expires_at")) and self._age(row["lease_expires_at"]) > 0
             orphaned = (
                 status is None
@@ -177,7 +206,7 @@ class Reconciler:
             if not orphaned:
                 continue
             if self.registry.release(row["vm_id"], row["lease_id"], "recycle"):
-                detail = f"owner {row['owner_workflow_id']} is {status or 'gone'}"
+                detail = f"owner {owner} is {status or 'gone'}"
                 self.registry.emit(
                     "orphan",
                     "reconciler",
@@ -193,7 +222,7 @@ class Reconciler:
         actions: list[Action] = []
         policy = PoolPolicy.from_row(inv.policy)
         live = [r for r in inv.rows if r["state"] in LIVE_STATES]
-        known_refs = {self._ref(r) for r in inv.rows}
+        known_refs = {self._ref(r) for r in inv.fleet_rows}
         unregistered = [i for i in inv.instances if i["provider_ref"] not in known_refs]
         idle = [r for r in live if r["state"] == "idle"]
         booting = [r for r in live if r["state"] == "booting"]
@@ -247,9 +276,15 @@ class Reconciler:
         for req in inv.pending:
             if self._age(req["created_at"]) > self.t.abandon_after_seconds:
                 if self.registry.abandon_request(req["request_id"]):
-                    actions.append(
-                        Action("abandon", "", f"request {req['request_id']} pending too long")
+                    detail = f"request {req['request_id']} pending too long"
+                    self.registry.emit(
+                        "abandon",
+                        "reconciler",
+                        detail,
+                        vm_id="",
+                        details={"request_id": req["request_id"]},
                     )
+                    actions.append(Action("abandon", "", detail))
         return actions
 
     # ---- step 5: sample -------------------------------------------------------------
@@ -257,7 +292,7 @@ class Reconciler:
     def sample(self, pool: str) -> dict[str, int]:
         inv = self.inventory(pool)
         policy = PoolPolicy.from_row(inv.policy)
-        known_refs = {self._ref(r) for r in inv.rows}
+        known_refs = {self._ref(r) for r in inv.fleet_rows}
         unregistered = sum(1 for i in inv.instances if i["provider_ref"] not in known_refs)
         by_state = Counter(r["state"] for r in inv.rows)
         counts = {
@@ -295,8 +330,16 @@ class Reconciler:
     def _terminate(self, ref: str) -> None:
         try:
             self.provider.terminate(ref)
-        except Exception as e:  # noqa: BLE001 - a failed terminate must not stop the pass
+        # Broad on purpose: one provider failure must not abort the rest of the pass.
+        except Exception as e:
             log.warning("terminate %s failed: %s", ref, e)
+            self.registry.emit(
+                "terminate_failed",
+                "reconciler",
+                f"terminate {ref} failed: {e}",
+                vm_id=ref,
+                details={"error": str(e)},
+            )
 
     def _write_off(self, vm_id: str, reason: str, kind: str, actions: list[Action]) -> None:
         if self.registry.write_off(vm_id, reason):

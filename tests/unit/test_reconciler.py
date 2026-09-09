@@ -1,7 +1,10 @@
 """Reconciler: each step of spec 6.6 against moto and a list-backed provider."""
 
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+
+import pytest
 
 from sandbox.manager.providers.base import LaunchSpec, ProviderInstance
 from sandbox.manager.reconciler import Reconciler, Tunables
@@ -48,6 +51,32 @@ class FakeClock:
         self.offset += timedelta(seconds=seconds)
 
 
+ACTION_KINDS = {
+    "terminate_unknown",
+    "write_off_missing",
+    "write_off_boot",
+    "write_off_stale",
+    "write_off_stuck",
+    "sweep",
+    "orphan",
+    "launch",
+    "scale_in",
+    "abandon",
+}
+
+
+def _event_types(registry) -> set[str]:
+    return {e["type"] for e in registry.recent_events(200) if e["actor"] == "reconciler"}
+
+
+def _assert_emitted(registry, actions):
+    """Every decision the reconciler returns must also reach the event feed."""
+    emitted = _event_types(registry)
+    for action in actions:
+        assert action.kind in emitted, f"no reconciler event for {action.kind}"
+    return actions
+
+
 def _make(registry, min_idle=2, max=5):
     registry.ensure_policy("demo", min_idle=min_idle, max=max, image="img")
     provider = ListProvider()
@@ -78,7 +107,7 @@ def _claim(registry, vm_id, owner="wf-1"):
 
 def test_top_up_from_zero_launches_the_floor_once(registry):
     rec, provider, _ = _make(registry)
-    actions = rec.capacity(rec.inventory("demo"))
+    actions = _assert_emitted(registry, rec.capacity(rec.inventory("demo")))
     assert [a.kind for a in actions] == ["launch", "launch"]
     assert len(provider.launched) == 2
     # Unregistered instances count as booting: a second pass must not launch again.
@@ -105,13 +134,14 @@ def test_missing_instance_is_written_off_and_later_swept(registry):
     _vm(registry, provider, "sbx-a")
     _claim(registry, "sbx-a")
     provider.instances.pop("sbx-a")
-    actions = rec.health(rec.inventory("demo"))
+    actions = _assert_emitted(registry, rec.health(rec.inventory("demo")))
     assert [a.kind for a in actions] == ["write_off_missing"]
     row = registry.get_vm("sbx-a")
     assert row["state"] == "terminated" and "lease_id" not in row
     assert rec.health(rec.inventory("demo")) == []
     clock.advance(Tunables.local().sweep_after_seconds + 1)
-    assert [a.kind for a in rec.health(rec.inventory("demo"))] == ["sweep"]
+    swept = _assert_emitted(registry, rec.health(rec.inventory("demo")))
+    assert [a.kind for a in swept] == ["sweep"]
     assert registry.get_vm("sbx-a") is None
 
 
@@ -122,11 +152,12 @@ def test_stale_boot_and_stuck_rows_are_written_off(registry):
     _vm(registry, provider, "sbx-stuck")
     assert registry.set_state("sbx-stuck", "recycling", expect="idle")
     clock.advance(Tunables.local().stale_after_seconds + 1)
-    kinds = sorted(a.kind for a in rec.health(rec.inventory("demo")))
+    kinds = sorted(a.kind for a in _assert_emitted(registry, rec.health(rec.inventory("demo"))))
     assert kinds == ["write_off_stale", "write_off_stale"]  # idle and recycling both went stale
     assert registry.get_vm("sbx-boot")["state"] == "booting", "booting rows get the boot deadline"
     clock.advance(Tunables.local().boot_deadline_seconds)
-    assert [a.kind for a in rec.health(rec.inventory("demo"))] == ["write_off_boot"]
+    booted = _assert_emitted(registry, rec.health(rec.inventory("demo")))
+    assert [a.kind for a in booted] == ["write_off_boot"]
     assert set(provider.terminated) == {"sbx-idle", "sbx-stuck", "sbx-boot"}
 
 
@@ -141,7 +172,8 @@ def test_stuck_transition_is_written_off_even_with_a_fresh_heartbeat(registry):
         UpdateExpression="SET last_heartbeat_at = :t",
         ExpressionAttributeValues={":t": to_iso(clock())},
     )
-    assert [a.kind for a in rec.health(rec.inventory("demo"))] == ["write_off_stuck"]
+    stuck = _assert_emitted(registry, rec.health(rec.inventory("demo")))
+    assert [a.kind for a in stuck] == ["write_off_stuck"]
     assert provider.terminated == ["sbx-a"]
 
 
@@ -152,24 +184,45 @@ def test_unknown_instance_past_the_boot_deadline_is_terminated(registry):
     )
     assert rec.health(rec.inventory("demo")) == []
     clock.advance(Tunables.local().boot_deadline_seconds + 1)
-    assert [a.kind for a in rec.health(rec.inventory("demo"))] == ["terminate_unknown"]
+    ghosts = _assert_emitted(registry, rec.health(rec.inventory("demo")))
+    assert [a.kind for a in ghosts] == ["terminate_unknown"]
     assert provider.terminated == ["sbx-ghost"]
+
+
+def test_another_pools_vms_are_not_terminated_as_unknown(registry):
+    rec, provider, clock = _make(registry)
+    registry.ensure_policy("other", min_idle=0, max=5, image="img")
+    provider.instances["sbx-other"] = ProviderInstance(
+        "sbx-other", "sbx-other", "running", now_iso(), "", ""
+    )
+    registry.register_vm("sbx-other", "other", "sbx-other", "test", [1], {})
+    assert registry.set_state("sbx-other", "idle", expect="booting")
+    clock.advance(Tunables.local().boot_deadline_seconds + 1)
+    # `provider.list()` is fleet-wide, so the unknown check has to read every pool's rows.
+    assert rec.health(rec.inventory("demo")) == []
+    assert registry.get_vm("sbx-other")["state"] == "idle"
+    assert provider.terminated == []
+    # The other pool's instance is registered, so it is not spare capacity for `demo`.
+    assert [a.kind for a in rec.capacity(rec.inventory("demo"))] == ["launch", "launch"]
 
 
 def test_orphaned_leases_are_released_and_running_ones_kept(registry):
     rec, provider, _ = _make(registry)
-    _vm(registry, provider, "sbx-a")
-    _vm(registry, provider, "sbx-b")
-    _vm(registry, provider, "sbx-c")
-    _claim(registry, "sbx-a", owner="closed")
-    _claim(registry, "sbx-b", owner="running")
-    _claim(registry, "sbx-c", owner="vanished")
+    for vm_id in ("sbx-a", "sbx-b", "sbx-c"):
+        _vm(registry, provider, vm_id)
+    # `claim_idle` picks the VM, so the owner is the identity to assert on, not a vm id.
+    claimed = {
+        owner: _claim(registry, f"sbx-{n}", owner=owner)["vm_id"]
+        for owner, n in (("closed", "a"), ("running", "b"), ("vanished", "c"))
+    }
     status = {"closed": "TERMINATED", "running": "RUNNING"}
-    actions = rec.leases(rec.inventory("demo"), lambda wf, run: status.get(wf))
-    assert sorted(a.vm_id for a in actions) == ["sbx-a", "sbx-c"]
-    assert registry.get_vm("sbx-a")["state"] == "recycling"
-    assert registry.get_vm("sbx-b")["state"] == "leased"
-    assert registry.get_vm("sbx-c")["state"] == "recycling"
+    actions = _assert_emitted(
+        registry, rec.leases(rec.inventory("demo"), lambda wf, r: status.get(wf))
+    )
+    assert sorted(a.vm_id for a in actions) == sorted([claimed["closed"], claimed["vanished"]])
+    assert registry.get_vm(claimed["closed"])["state"] == "recycling"
+    assert registry.get_vm(claimed["running"])["state"] == "leased"
+    assert registry.get_vm(claimed["vanished"])["state"] == "recycling"
 
 
 def test_expired_lease_with_a_non_running_owner_is_released(registry):
@@ -179,19 +232,20 @@ def test_expired_lease_with_a_non_running_owner_is_released(registry):
     assert rec.leases(rec.inventory("demo"), lambda wf, run: "RUNNING") == []
     clock.advance(61)
     assert rec.leases(rec.inventory("demo"), lambda wf, run: "RUNNING") == []
-    assert [a.kind for a in rec.leases(rec.inventory("demo"), lambda wf, run: "UNKNOWN")] == [
-        "orphan"
-    ]
+    orphans = _assert_emitted(
+        registry, rec.leases(rec.inventory("demo"), lambda wf, run: "UNKNOWN")
+    )
+    assert [a.kind for a in orphans] == ["orphan"]
 
 
 def test_scale_in_retires_the_oldest_unprotected_idle_vm_after_the_cooldown(registry):
     rec, provider, clock = _make(registry, min_idle=1)
-    _vm(registry, provider, "sbx-old")
-    _vm(registry, provider, "sbx-mid")
-    _vm(registry, provider, "sbx-new")
+    for vm_id in ("sbx-old", "sbx-mid", "sbx-new"):
+        _vm(registry, provider, vm_id)
+        time.sleep(0.002)  # created_at is millisecond-resolution; keep the order strict
     assert rec.capacity(rec.inventory("demo")) == [], "cooldown not reached"
     clock.advance(Tunables.local().scale_in_cooldown_seconds + 1)
-    actions = rec.capacity(rec.inventory("demo"))
+    actions = _assert_emitted(registry, rec.capacity(rec.inventory("demo")))
     assert [a.kind for a in actions] == ["scale_in"] and actions[0].vm_id == "sbx-old"
     assert registry.get_vm("sbx-old")["state"] == "terminated"
     assert provider.terminated == ["sbx-old"]
@@ -201,12 +255,30 @@ def test_scale_in_retires_the_oldest_unprotected_idle_vm_after_the_cooldown(regi
     assert rec.capacity(rec.inventory("demo")) == [], "pending blocks scale-in"
 
 
+def test_a_protected_idle_vm_is_never_the_scale_in_victim(registry):
+    rec, provider, clock = _make(registry, min_idle=1)
+    for vm_id in ("sbx-old", "sbx-mid", "sbx-new"):
+        _vm(registry, provider, vm_id)
+        time.sleep(0.002)
+    registry.vms.update_item(
+        Key={"vm_id": "sbx-old"},
+        UpdateExpression="SET protected = :p",
+        ExpressionAttributeValues={":p": True},
+    )
+    clock.advance(Tunables.local().scale_in_cooldown_seconds + 1)
+    actions = rec.capacity(rec.inventory("demo"))
+    assert [a.kind for a in actions] == ["scale_in"] and actions[0].vm_id == "sbx-mid"
+    assert registry.get_vm("sbx-old")["state"] == "idle"
+    assert provider.terminated == ["sbx-mid"]
+
+
 def test_abandoned_requests(registry):
     rec, _, clock = _make(registry)
     registry.record_pending("r1", "demo", "wf")
     assert rec.requests(rec.inventory("demo")) == []
     clock.advance(Tunables.local().abandon_after_seconds + 1)
-    assert [a.kind for a in rec.requests(rec.inventory("demo"))] == ["abandon"]
+    abandoned = _assert_emitted(registry, rec.requests(rec.inventory("demo")))
+    assert [a.kind for a in abandoned] == ["abandon"]
     assert registry.pending_count("demo") == 0
 
 
@@ -220,7 +292,55 @@ def test_run_records_a_fleet_sample(registry):
     assert registry.latest_fleet_sample()["details"]["total"] == 2
 
 
+def test_every_action_kind_reaches_the_event_feed(registry):
+    rec, provider, clock = _make(registry, min_idle=1, max=8)
+    t = Tunables.local()
+    seen: set[str] = set()
+
+    def step(actions):
+        seen.update(a.kind for a in _assert_emitted(registry, actions))
+
+    # launch: nothing exists yet, so the floor of 1 is topped up.
+    step(rec.capacity(rec.inventory("demo")))
+
+    # orphan: a leased VM whose owner workflow has closed.
+    _vm(registry, provider, "sbx-a")
+    _claim(registry, "sbx-a", owner="closed")
+    step(rec.leases(rec.inventory("demo"), lambda wf, run: "TERMINATED"))
+
+    # write_off_missing: a registered VM whose instance vanished.
+    _vm(registry, provider, "sbx-b")
+    provider.instances.pop("sbx-b")
+    step(rec.health(rec.inventory("demo")))
+
+    # One pass past every deadline: the launched-but-unregistered VM is unknown,
+    # sbx-a is stuck in recycling, sbx-c went stale, and sbx-d never finished booting.
+    _vm(registry, provider, "sbx-c")
+    _vm(registry, provider, "sbx-d", state="booting")
+    clock.advance(t.stuck_after_seconds + 1)
+    step(rec.health(rec.inventory("demo")))
+
+    # sweep: the written-off rows age out of the table.
+    clock.advance(t.sweep_after_seconds + 1)
+    step(rec.health(rec.inventory("demo")))
+
+    # scale_in: two idle VMs against a floor of one, both past the cooldown.
+    _vm(registry, provider, "sbx-e")
+    time.sleep(0.002)
+    _vm(registry, provider, "sbx-f")
+    step(rec.capacity(rec.inventory("demo")))
+
+    # abandon: a request that has been pending longer than the deadline.
+    registry.record_pending("r1", "demo", "wf")
+    step(rec.requests(rec.inventory("demo")))
+
+    assert seen == ACTION_KINDS
+    assert _event_types(registry) >= ACTION_KINDS
+
+
 def test_tunables_profiles():
     assert Tunables.for_profile("local").stale_after_seconds == 30
     assert Tunables.for_profile("prod").boot_deadline_seconds == 600
     assert Tunables.for_profile("test").scale_in_cooldown_seconds == 2
+    with pytest.raises(ValueError, match="unknown profile 'nope'"):
+        Tunables.for_profile("nope")
