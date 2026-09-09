@@ -9,6 +9,7 @@ Production: identical.
 """
 
 import asyncio
+import contextlib
 from datetime import timedelta
 
 from temporalio.client import Client
@@ -117,6 +118,25 @@ class AgentRuntime:
             # `run_until_stopped` is waiting on it. Without this the VM would
             # hang draining forever with its queue still being polled.
             await self.stop(final_state="terminated")
+
+    async def crash(self) -> None:
+        """Simulate the machine vanishing: stop everything, write nothing.
+
+        A real dead VM cannot update its row, so neither does this. The
+        reconciler must notice from the provider's inventory and the stale
+        heartbeat. Running jobs die with the machine.
+        """
+        self._stopped = True
+        self.stop_event.set()
+        for task in (self._worker_task, self._heartbeat_task, self._drain_task):
+            if task is not None and not task.done():
+                task.cancel()
+        for task in (self._worker_task, self._heartbeat_task, self._drain_task):
+            if task is not None:
+                with contextlib.suppress(BaseException):
+                    await task
+        for job_id in self.jobs.running_job_ids():
+            await asyncio.to_thread(self.jobs.cancel, job_id, 0.5, "cancelled")
 
     async def stop(self, final_state: str = "terminated") -> None:
         if self._stopped:
