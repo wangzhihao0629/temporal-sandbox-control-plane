@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 import pytest
 
 from sandbox.manager.providers.base import LaunchSpec, ProviderInstance
+from sandbox.manager.reconcile_activities import ReconcileActivities
+from sandbox.manager.reconcile_types import ReconcileParams
 from sandbox.manager.reconciler import Reconciler, Tunables
 from sandbox.timeutil import now, now_iso, to_iso
 
@@ -16,9 +18,13 @@ class ListProvider:
         self.instances: dict[str, ProviderInstance] = {}
         self.launched: list[str] = []
         self.terminated: list[str] = []
+        self.launch_fails = 0  # raise on this many launches, then behave
 
     def launch(self, vm_id, spec: LaunchSpec, env):
         assert spec.image == "img"
+        if self.launch_fails:
+            self.launch_fails -= 1
+            raise RuntimeError("provider is out of capacity")
         self.launched.append(vm_id)
         self.instances[vm_id] = ProviderInstance(vm_id, vm_id, "running", now_iso(), "", "")
         return vm_id
@@ -60,6 +66,7 @@ ACTION_KINDS = {
     "sweep",
     "orphan",
     "launch",
+    "launch_failed",
     "scale_in",
     "abandon",
 }
@@ -112,6 +119,36 @@ def test_top_up_from_zero_launches_the_floor_once(registry):
     assert len(provider.launched) == 2
     # Unregistered instances count as booting: a second pass must not launch again.
     assert rec.capacity(rec.inventory("demo")) == []
+
+
+def test_a_retried_capacity_step_launches_the_floor_once(registry):
+    """The capacity activity takes its own inventory, so a retry cannot double-launch.
+
+    Temporal hands a retry the same argument as the first attempt. If that
+    argument were the workflow's snapshot, the retry would see a fleet of zero
+    again and launch the floor a second time.
+    """
+    rec, provider, clock = _make(registry)
+    activities = ReconcileActivities(rec, client=None)
+    params = ReconcileParams(pool="demo")
+    assert [a.kind for a in activities.capacity(params)] == ["launch", "launch"]
+    assert activities.capacity(params) == []
+    assert len(provider.launched) == 2
+    # The same activity also sweeps requests, over that same fresh snapshot.
+    registry.record_pending("r1", "demo", "wf")
+    clock.advance(Tunables.local().abandon_after_seconds + 1)
+    assert [a.kind for a in activities.capacity(params)] == ["launch", "abandon"]
+
+
+def test_a_failed_launch_ends_the_step_without_aborting_the_pass(registry):
+    rec, provider, _ = _make(registry)
+    provider.launch_fails = 1
+    actions = _assert_emitted(registry, rec.capacity(rec.inventory("demo")))
+    # One failure ends the launch loop: the provider is not asked twice in a pass.
+    assert [a.kind for a in actions] == ["launch_failed"]
+    assert provider.launched == []
+    # The next pass still tries, and the floor is reached.
+    assert [a.kind for a in rec.capacity(rec.inventory("demo"))] == ["launch", "launch"]
 
 
 def test_pending_requests_add_to_the_deficit_and_max_caps_it(registry):
@@ -299,6 +336,10 @@ def test_every_action_kind_reaches_the_event_feed(registry):
 
     def step(actions):
         seen.update(a.kind for a in _assert_emitted(registry, actions))
+
+    # launch_failed: the provider refuses the first launch of the pass.
+    provider.launch_fails = 1
+    step(rec.capacity(rec.inventory("demo")))
 
     # launch: nothing exists yet, so the floor of 1 is topped up.
     step(rec.capacity(rec.inventory("demo")))

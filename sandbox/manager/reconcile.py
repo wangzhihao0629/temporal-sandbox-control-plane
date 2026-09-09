@@ -1,10 +1,13 @@
 """The reconcile workflow.
 
 What: one pass of the reconciler as a short workflow: inventory, health,
-inventory, leases, inventory, capacity, requests, sample.
+inventory, leases, capacity, sample.
 Why: a Temporal Schedule runs it every few seconds with overlap policy SKIP, so
-the fleet loop is durable, visible in the UI, and never runs twice at once.
-Nothing here is eternal; each run is a fresh, short history.
+the fleet loop is durable, visible in the UI, and the schedule never overlaps
+its own runs. Capacity takes the params rather than an inventory: it snapshots
+the fleet itself, so a retry of the one step that creates machines cannot launch
+against a stale count. Nothing here is eternal; each run is a fresh, short
+history.
 Production: identical, on a one-minute schedule.
 """
 
@@ -17,7 +20,6 @@ from sandbox.manager.reconcile_types import (
     CAPACITY,
     HEALTH,
     LEASES,
-    REQUESTS,
     SAMPLE,
     TAKE_INVENTORY,
     Action,
@@ -45,11 +47,9 @@ class ReconcileWorkflow:
             TAKE_INVENTORY, params, result_type=Inventory, **_STEP
         )
         actions += await workflow.execute_activity(LEASES, inv, result_type=list[Action], **_STEP)
-        inv = await workflow.execute_activity(
-            TAKE_INVENTORY, params, result_type=Inventory, **_STEP
+        actions += await workflow.execute_activity(
+            CAPACITY, params, result_type=list[Action], **_STEP
         )
-        actions += await workflow.execute_activity(CAPACITY, inv, result_type=list[Action], **_STEP)
-        actions += await workflow.execute_activity(REQUESTS, inv, result_type=list[Action], **_STEP)
         counts = await workflow.execute_activity(
             SAMPLE, params, result_type=dict[str, int], **_STEP
         )

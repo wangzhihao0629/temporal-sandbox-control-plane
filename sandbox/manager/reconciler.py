@@ -86,8 +86,10 @@ class Reconciler:
         policy = self.registry.get_policy(pool)
         if policy is None:
             raise RuntimeError(f"pool {pool!r} has no policy item; run sandbox.bootstrap")
-        rows = self.registry.list_vms(pool)
+        # One scan, two views: a second `list_vms(pool)` would be a second scan of
+        # the same table and could disagree with this one.
         fleet_rows = self.registry.list_vms()
+        rows = [r for r in fleet_rows if r["pool"] == pool]
         instances = [asdict(i) for i in self.provider.list() if i.vm_id.startswith(NAME_PREFIX)]
         pending = self.registry.pending_requests(pool)
         return Inventory(
@@ -205,7 +207,21 @@ class Reconciler:
 
         for _ in range(max(0, min(deficit, room))):
             vm_id = new_vm_id()
-            self._launcher(vm_id, inv.pool, policy)
+            try:
+                self._launcher(vm_id, inv.pool, policy)
+            # Broad on purpose: a provider that refuses one launch must not abort
+            # the pass, and must not be asked again in it.
+            except Exception as e:
+                log.warning("launch %s failed: %s", vm_id, e)
+                self.registry.emit(
+                    "launch_failed",
+                    "reconciler",
+                    f"launch {vm_id} failed: {e}",
+                    vm_id=vm_id,
+                    details={"error": str(e)},
+                )
+                actions.append(Action("launch_failed", vm_id, str(e)))
+                break
             self.registry.emit(
                 "launch",
                 "reconciler",

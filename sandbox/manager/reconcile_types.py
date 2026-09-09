@@ -1,7 +1,7 @@
 """The values that cross between the reconcile workflow and its activities.
 
 What: the params, the inventory snapshot, one action, one pass's report, and
-the six activity names.
+the five activity names.
 Why: the workflow module must import nothing that pulls boto3 into Temporal's
 workflow sandbox, so the shapes it passes to activities live apart from the
 reconciler that builds them.
@@ -15,7 +15,6 @@ TAKE_INVENTORY = ACTIVITY_PREFIX + "take_inventory"
 HEALTH = ACTIVITY_PREFIX + "health"
 LEASES = ACTIVITY_PREFIX + "leases"
 CAPACITY = ACTIVITY_PREFIX + "capacity"
-REQUESTS = ACTIVITY_PREFIX + "requests"
 SAMPLE = ACTIVITY_PREFIX + "sample"
 
 

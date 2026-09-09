@@ -3,9 +3,13 @@
 What: one activity per step of the pure `Reconciler`, plus the owner-status
 lookup that needs a Temporal client.
 Why: each step is its own activity so the Temporal UI shows what a pass did and
-a failing step retries alone. The leases step is async because describing a
-workflow is an awaitable client call; the others are sync and run in the
-manager's thread pool because the registry and provider are blocking.
+a failing step retries alone. `capacity` takes its own inventory instead of the
+workflow's, because a retry after a partial launch must see the VMs the first
+attempt started or it launches them twice; the request sweep runs over that same
+fresh snapshot, which is why it shares the activity rather than owning one. The
+leases step is async because describing a workflow is an awaitable client call;
+the others are sync and run in the manager's thread pool because the registry
+and provider are blocking.
 Production: identical.
 """
 
@@ -19,7 +23,6 @@ from sandbox.manager.reconcile_types import (
     CAPACITY,
     HEALTH,
     LEASES,
-    REQUESTS,
     SAMPLE,
     TAKE_INVENTORY,
     Action,
@@ -40,7 +43,6 @@ class ReconcileActivities:
             self.health,
             self.leases,
             self.capacity,
-            self.requests,
             self.sample,
         ]
 
@@ -75,12 +77,9 @@ class ReconcileActivities:
         return desc.status.name if desc.status is not None else None
 
     @activity.defn(name=CAPACITY)
-    def capacity(self, inv: Inventory) -> list[Action]:
-        return self.reconciler.capacity(inv)
-
-    @activity.defn(name=REQUESTS)
-    def requests(self, inv: Inventory) -> list[Action]:
-        return self.reconciler.requests(inv)
+    def capacity(self, params: ReconcileParams) -> list[Action]:
+        inv = self.reconciler.inventory(params.pool)
+        return self.reconciler.capacity(inv) + self.reconciler.requests(inv)
 
     @activity.defn(name=SAMPLE)
     def sample(self, params: ReconcileParams) -> dict[str, int]:
