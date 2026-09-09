@@ -2,9 +2,11 @@
 
 import json
 import shutil
+import subprocess
 
 import pytest
 
+from sandbox.manager.providers import apple_container
 from sandbox.manager.providers.apple_container import (
     AppleContainerProvider,
     ProviderError,
@@ -47,11 +49,13 @@ INFRA = {
 class FakeCli:
     def __init__(self, responses=None, fail_on=()):
         self.calls: list[list[str]] = []
+        self.timeouts: list[float | None] = []
         self.responses = responses or {}
         self.fail_on = fail_on
 
-    def __call__(self, args):
+    def __call__(self, args, timeout=None):
         self.calls.append(args)
+        self.timeouts.append(timeout)
         if args[0] in self.fail_on:
             raise ProviderError(f"container {args[0]} failed")
         return self.responses.get(args[0], "")
@@ -97,6 +101,7 @@ def test_launch_builds_the_run_command():
             "sandbox-vm:dev",
         ]
     ]
+    assert cli.timeouts == [apple_container.LAUNCH_TIMEOUT_SECONDS], "a launch boots an image"
 
 
 def test_list_filters_to_sandbox_vms_and_list_all_does_not():
@@ -142,6 +147,17 @@ def test_terminate_reraises_when_the_container_still_exists():
     with pytest.raises(ProviderError):
         provider.terminate("sbx-3f9c1a2b")
     assert cli.calls == [["delete", "--force", "sbx-3f9c1a2b"], ["inspect", "sbx-3f9c1a2b"]]
+
+
+def test_run_cli_translates_a_hung_cli_into_a_provider_error(monkeypatch):
+    def hang(cmd, capture_output, text, timeout):
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(apple_container.subprocess, "run", hang)
+    with pytest.raises(ProviderError, match=r"container ls timed out after 60s"):
+        apple_container.run_cli(["ls"])
+    with pytest.raises(ProviderError, match=r"timed out after 5s"):
+        apple_container.run_cli(["ls"], timeout=5)
 
 
 @pytest.mark.skipif(shutil.which("container") is None, reason="container CLI not installed")

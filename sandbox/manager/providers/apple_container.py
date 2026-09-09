@@ -8,6 +8,11 @@ name, so the manager knows the id before the VM registers itself.
 Production: replaced by an EC2 provider over RunInstances, TerminateInstances,
 DescribeInstances, and ASG instance protection. Nothing above this module
 changes.
+
+Every call is bounded by a timeout. The `container` CLI can wedge — a stuck
+daemon, a VM that will not stop — and a call that never returns would hold a
+manager activity thread for as long as the process lives, which is how one bad
+container stops the whole fleet loop.
 """
 
 import json
@@ -16,14 +21,22 @@ import subprocess
 from sandbox.manager.providers.base import LaunchSpec, ProviderInstance
 
 NAME_PREFIX = "sbx-"
+CLI_TIMEOUT_SECONDS = 60
+# Launch pulls and boots an image, so it gets its own, longer budget.
+LAUNCH_TIMEOUT_SECONDS = 180
 
 
 class ProviderError(RuntimeError):
     pass
 
 
-def run_cli(args: list[str]) -> str:
-    proc = subprocess.run(["container", *args], capture_output=True, text=True)
+def run_cli(args: list[str], timeout: float = CLI_TIMEOUT_SECONDS) -> str:
+    try:
+        proc = subprocess.run(
+            ["container", *args], capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        raise ProviderError(f"container {' '.join(args)} timed out after {timeout}s") from None
     if proc.returncode != 0:
         raise ProviderError(f"container {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc.stdout
@@ -65,7 +78,7 @@ class AppleContainerProvider:
         for key, value in env.items():
             args += ["--env", f"{key}={value}"]
         args.append(spec.image or self.image)
-        self.runner(args)
+        self.runner(args, timeout=LAUNCH_TIMEOUT_SECONDS)
         return vm_id
 
     def terminate(self, provider_ref: str) -> None:

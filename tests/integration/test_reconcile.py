@@ -12,6 +12,7 @@ from sandbox.manager.activities import ManagerActivities
 from sandbox.manager.providers.fake import FakeProvider
 from sandbox.manager.reconcile import ReconcileWorkflow
 from sandbox.manager.reconcile_activities import ReconcileActivities
+from sandbox.manager.reconcile_once import run_once
 from sandbox.manager.reconcile_types import ReconcileParams
 from sandbox.manager.reconciler import Reconciler, Tunables
 from sandbox.manager.schedule import ensure_schedule
@@ -182,6 +183,31 @@ async def test_stale_pending_requests_are_abandoned(env, fleet):
     report = await _reconcile(env)
     assert "abandon" in [a.kind for a in report.actions]
     assert registry.pending_count("demo") == 0
+
+
+async def test_reconcile_once_runs_the_pass_through_the_schedule(env, fleet):
+    """`make reconcile` must trigger the schedule, not start a rival workflow.
+
+    A second workflow would sidestep the overlap policy and could reconcile the
+    same fleet beside the scheduled run. The interval is a day so the only run
+    in this test is the triggered one.
+    """
+    registry, provider = fleet
+    schedule_id = await ensure_schedule(env.client, "demo", 86400, "test")
+    handle = env.client.get_schedule_handle(schedule_id)
+    try:
+        report = await run_once(env.client, "demo")
+        assert [a.kind for a in report.actions] == ["launch", "launch"]
+        assert report.counts["total"] == 2
+        desc = await handle.describe()
+        assert len(desc.info.recent_actions) == 1, "one triggered run, no rival workflow"
+    finally:
+        await handle.delete()
+
+
+async def test_reconcile_once_says_what_to_start_when_there_is_no_schedule(env):
+    with pytest.raises(SystemExit, match="no reconcile schedule 'sandbox-reconcile-absent'"):
+        await run_once(env.client, "absent")
 
 
 async def test_ensure_schedule_is_idempotent(env):
