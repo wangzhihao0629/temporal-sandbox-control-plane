@@ -94,4 +94,4 @@ echo "==> wrote .env (moto 127.0.0.1:${MOTO_PORT}, vm gateway ${GATEWAY})"
 
 echo "==> tables and buckets"
 uv run python -m sandbox.bootstrap
-echo "==> up. next: make image (once), make vm, make workers, make smoke"
+echo "==> up. next: make image (once), make workers, make smoke  (the reconciler launches VMs; make vm is a manual override)"
