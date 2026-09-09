@@ -120,11 +120,23 @@ class AgentRuntime:
             await self.stop(final_state="terminated")
 
     async def crash(self) -> None:
-        """Simulate the machine vanishing: stop everything, write nothing.
+        """Simulate the machine vanishing: stop everything, initiate no writes.
 
         A real dead VM cannot update its row, so neither does this. The
         reconciler must notice from the provider's inventory and the stale
         heartbeat. Running jobs die with the machine.
+
+        Cancelling the worker task leaves no poller behind: the SDK's
+        `Worker._run` awaits a shielded task, catches the cancellation, and
+        completes its graceful shutdown — pollers stopped, activity completions
+        flushed — before re-raising. On the Temporal side a crashed VM is
+        therefore indistinguishable from a cleanly stopped one, which is why
+        the registry is the only place a crash shows up.
+
+        "Writes nothing" means this method starts no write. A heartbeat already
+        in flight on its worker thread can still land one last row update after
+        the cancellation, so the reconciler must rely on the heartbeat going
+        stale rather than on the instant it stops.
         """
         self._stopped = True
         self.stop_event.set()

@@ -11,7 +11,10 @@ from sandbox.manager.providers.fake import FakeProvider
 @pytest.fixture
 async def provider(env, aws, tmp_path):
     registry, store = aws
-    return FakeProvider(asyncio.get_running_loop(), env.client, registry, store, tmp_path)
+    provider = FakeProvider(asyncio.get_running_loop(), env.client, registry, store, tmp_path)
+    yield provider
+    for provider_ref in list(provider.vms):
+        await asyncio.to_thread(provider.terminate, provider_ref)
 
 
 async def _settle(registry, vm_id, state, seconds=5):
@@ -31,7 +34,8 @@ async def test_launch_registers_and_terminate_removes(provider, aws):
     assert [i.vm_id for i in provider.list()] == ["sbx-fake1"]
     assert provider.describe("sbx-fake1").state == "running"
     await asyncio.to_thread(provider.terminate, "sbx-fake1")
-    assert provider.list() == [] and provider.describe("sbx-fake1") is None
+    assert provider.list() == []
+    assert provider.describe("sbx-fake1") is None
     assert registry.get_vm("sbx-fake1")["state"] == "terminated"
 
 
@@ -42,6 +46,10 @@ async def test_kill_leaves_the_row_behind_like_a_real_crash(provider, aws):
     await asyncio.to_thread(provider.kill, "sbx-fake2")
     assert provider.list() == []
     assert registry.get_vm("sbx-fake2")["state"] == "idle", "a crash writes nothing"
+    # Two heartbeat intervals with nothing left alive to write one.
+    beat = registry.get_vm("sbx-fake2")["last_heartbeat_at"]
+    await asyncio.sleep(1.2)
+    assert registry.get_vm("sbx-fake2")["last_heartbeat_at"] == beat
 
 
 async def test_stop_drains_and_the_instance_disappears(provider, aws):

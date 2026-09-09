@@ -34,6 +34,7 @@ class InProcessVm:
         (secrets / "github_token").write_text("dummy-github-token\n")
         (secrets / "llm_gateway").write_text("dummy-llm-key\n")
         self.workspace_root = base / "ws"
+        self.started_at: str = ""
         self.cfg = AgentConfig(
             vm_id=self.vm_id,
             pool=pool,

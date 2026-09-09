@@ -1,7 +1,7 @@
 """A provider whose VMs are in-process agents.
 
 What: launch starts an `InProcessVm` on the event loop; terminate stops it;
-kill crashes it without a registry write; stop drains it; list and describe
+kill crashes it, which initiates no registry write; stop drains it; list and describe
 report what is still running.
 Why: the reconciler's whole loop, top-up from zero, dead-VM write-off, orphan
 release, scale-in, runs against a real Temporal dev server and the real
@@ -14,10 +14,13 @@ them from the loop's own thread would deadlock; tests use `asyncio.to_thread`.
 """
 
 import asyncio
+import logging
 from pathlib import Path
 
 from sandbox.manager.providers.base import LaunchSpec, ProviderInstance
 from sandbox.testing.inprocess_vm import InProcessVm
+
+logger = logging.getLogger(__name__)
 
 
 class FakeProvider:
@@ -35,12 +38,36 @@ class FakeProvider:
     def _run(self, coro, timeout: float = 60):
         return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout)
 
+    def _call(self, coro, what: str, provider_ref: str) -> None:
+        """Run a teardown coroutine. The instance is already gone from `self.vms`.
+
+        A real provider's terminate is fire and forget: the instance does not
+        come back because the API call failed. Re-inserting it would leave the
+        reconciler chasing a VM nobody can stop, so a failure is logged and the
+        bookkeeping stands.
+        """
+        try:
+            self._run(coro)
+        except Exception:
+            logger.warning("%s of %s failed", what, provider_ref, exc_info=True)
+
     def launch(self, vm_id: str, spec: LaunchSpec, env: dict[str, str]) -> str:
+        # Registered before it boots: a start that dies halfway has already
+        # written a registry row and may hold a worker, so the caller must be
+        # able to see it. The failure path takes it back out again.
         vm = InProcessVm(
             self.client, self.registry, self.store, self.root, vm_id=vm_id, pool=self.pool
         )
-        self._run(vm.start())
         self.vms[vm_id] = vm
+        try:
+            self._run(vm.start())
+        except BaseException:
+            self.vms.pop(vm_id, None)
+            try:
+                self._run(vm.stop())
+            except Exception:
+                logger.warning("cleanup after failed launch of %s failed", vm_id, exc_info=True)
+            raise
         self.launched.append(vm_id)
         return vm_id
 
@@ -48,10 +75,11 @@ class FakeProvider:
         self.terminated.append(provider_ref)
         vm = self.vms.pop(provider_ref, None)
         if vm is not None:
-            self._run(vm.stop())
+            self._call(vm.stop(), "terminate", provider_ref)
 
     def list(self) -> list[ProviderInstance]:
-        return [self._instance(vm) for vm in self.vms.values()]
+        # A snapshot: terminate and kill mutate self.vms from other threads.
+        return [self._instance(vm) for vm in list(self.vms.values())]
 
     def describe(self, provider_ref: str) -> ProviderInstance | None:
         vm = self.vms.get(provider_ref)
@@ -60,12 +88,12 @@ class FakeProvider:
     def kill(self, provider_ref: str) -> None:
         vm = self.vms.pop(provider_ref, None)
         if vm is not None:
-            self._run(vm.runtime.crash())
+            self._call(vm.runtime.crash(), "kill", provider_ref)
 
     def stop(self, provider_ref: str) -> None:
         vm = self.vms.pop(provider_ref, None)
         if vm is not None:
-            self._run(vm.runtime.drain())
+            self._call(vm.runtime.drain(), "stop", provider_ref)
 
     @staticmethod
     def _instance(vm: InProcessVm) -> ProviderInstance:
