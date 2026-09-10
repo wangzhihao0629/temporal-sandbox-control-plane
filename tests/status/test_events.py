@@ -10,9 +10,9 @@ from tests.status.conftest import ListingProvider
 
 def _parse(frame: str) -> tuple[str, dict]:
     lines = frame.strip().splitlines()
-    kind = lines[0].removeprefix("event: ")
-    data = json.loads(lines[1].removeprefix("data: "))
-    return kind, data
+    kind = next(line.removeprefix("event: ") for line in lines if line.startswith("event: "))
+    raw = next(line.removeprefix("data: ") for line in lines if line.startswith("data: "))
+    return kind, json.loads(raw)
 
 
 @pytest.fixture
@@ -53,3 +53,15 @@ async def test_fleet_frames_carry_counts(deps):
     async for frame in event_stream(deps, max_events=1):
         kind, data = _parse(frame)
     assert kind == "fleet" and set(data["counts"]) >= {"idle", "leased", "pending"}
+
+
+async def test_reconnect_with_last_event_id_resumes_without_replaying(deps):
+    deps.registry.emit("boot", "vm-agent", "first", vm_id="sbx-a")
+    second = deps.registry.emit("launch", "reconciler", "second", vm_id="sbx-b")
+    deps.registry.emit("release", "manager", "third", vm_id="sbx-a")
+    frames = []
+    async for frame in event_stream(deps, max_events=2, last_event_id=second["ts_ulid"]):
+        frames.append(_parse(frame))
+    kinds = [k for k, _ in frames]
+    assert kinds == ["fleet", "control"]
+    assert frames[1][1]["message"] == "third"

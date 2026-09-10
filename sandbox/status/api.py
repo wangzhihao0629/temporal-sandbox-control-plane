@@ -10,8 +10,8 @@ slow provider never stalls the event loop, and the provider listing is cached
 for a couple of seconds because the page polls that often. `/api/jobs` stays
 a full scan of the registry (it has no better index), but the page polls it
 with `limit=30` and the demo's job count stays in the hundreds, so this is
-fine. Read-only, except two demo endpoints that Task 3 adds behind
-`STATUS_DEMO_MODE=1`.
+fine. Read-only, except two demo endpoints behind `STATUS_DEMO_MODE=1` and the
+`X-Sandbox-Demo` header.
 Production: an internal dashboard app over the same API, with the Temporal client and
 IAM role of the platform.
 """
@@ -264,14 +264,19 @@ def _control_frame(event: dict) -> str:
         "message": event.get("message", ""),
         "details": event.get("details", {}),
     }
-    return f"event: control\ndata: {json.dumps(payload)}\n\n"
+    return f"id: {event['ts_ulid']}\nevent: control\ndata: {json.dumps(payload)}\n\n"
 
 
-async def event_stream(deps: Deps, max_events: int | None = None) -> AsyncIterator[str]:
-    """Replay the last 30 events oldest first, then poll and push new ones.
+async def event_stream(
+    deps: Deps, max_events: int | None = None, last_event_id: str | None = None
+) -> AsyncIterator[str]:
+    """Replay events since `last_event_id` (or the last 30) oldest first, then poll and push
+    new ones.
 
-    Every second poll also carries a `fleet` frame so the header counters move
-    without the page polling `/api/fleet` separately. `max_events` bounds the
+    Every `control` frame carries `id: <ts_ulid>`, so a browser `EventSource` reconnect sends
+    it back as `Last-Event-ID` and this resumes from just after it instead of replaying the
+    last 30 events again. Every second poll also carries a `fleet` frame so the header
+    counters move without the page polling `/api/fleet` separately. `max_events` bounds the
     stream for tests; the server streams until the client disconnects.
     """
     sent = 0
@@ -282,7 +287,12 @@ async def event_stream(deps: Deps, max_events: int | None = None) -> AsyncIterat
     if max_events is not None and sent >= max_events:
         return
     recent = await asyncio.to_thread(deps.registry.recent_events, 30)
-    for event in reversed(recent):
+    if last_event_id is not None:
+        seen.update(e["ts_ulid"] for e in recent if e["ts_ulid"] <= last_event_id)
+        to_replay = [e for e in recent if e["ts_ulid"] > last_event_id]
+    else:
+        to_replay = recent
+    for event in reversed(to_replay):
         seen.add(event["ts_ulid"])
         yield _control_frame(event)
         sent += 1
@@ -374,9 +384,9 @@ def create_app(deps: Deps) -> FastAPI:
         return joins.sample_series(events, minutes, now())
 
     @app.get("/api/events")
-    async def api_events():
+    async def api_events(request: Request):
         return StreamingResponse(
-            event_stream(deps),
+            event_stream(deps, last_event_id=request.headers.get("last-event-id")),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
