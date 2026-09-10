@@ -236,13 +236,14 @@
     if (b.id === "drawer-stderr") return openLog(drawer.vm, drawer.job, drawer.stream === "stdout" ? "stderr" : "stdout");
     if (b.dataset.chaos) {
       if (!confirm(`${b.dataset.chaos} ${b.dataset.vm}?`)) return;
-      const r = await fetch(`/api/chaos/${encodeURIComponent(b.dataset.vm)}/${b.dataset.chaos}`, { method: "POST" });
+      const r = await fetch(`/api/chaos/${encodeURIComponent(b.dataset.vm)}/${b.dataset.chaos}`,
+        { method: "POST", headers: { "X-Sandbox-Demo": "1" } });
       if (!r.ok) alert(`${r.status}: ${await r.text()}`);
     }
     if (b.id === "apply") {
       const body = { min_idle: Number($("#min_idle").value), max: Number($("#max").value) };
       const r = await fetch(`/api/pool/${encodeURIComponent(config.pool)}`, { method: "PUT",
-        headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        headers: { "content-type": "application/json", "X-Sandbox-Demo": "1" }, body: JSON.stringify(body) });
       if (!r.ok) alert(`${r.status}: ${await r.text()}`);
     }
   });

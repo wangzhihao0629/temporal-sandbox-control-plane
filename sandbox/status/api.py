@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from temporalio.client import Client
 from temporalio.service import RPCError, RPCStatusCode
@@ -381,13 +381,15 @@ def create_app(deps: Deps) -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    def _demo_only():
+    def _demo_only(request: Request):
         if not deps.demo_mode:
             raise HTTPException(403, "demo endpoints are disabled; start with STATUS_DEMO_MODE=1")
+        if request.headers.get("x-sandbox-demo") != "1":
+            raise HTTPException(403, "demo writes need the X-Sandbox-Demo header")
 
     @app.post("/api/chaos/{vm_id}/{action}")
-    async def api_chaos(vm_id: str, action: str):
-        _demo_only()
+    async def api_chaos(vm_id: str, action: str, request: Request):
+        _demo_only(request)
         if action not in chaos.ACTIONS:
             raise HTTPException(422, f"action must be one of {chaos.ACTIONS}")
         row = await asyncio.to_thread(deps.registry.get_vm, vm_id)
@@ -402,8 +404,8 @@ def create_app(deps: Deps) -> FastAPI:
         return {"type": event["type"], "message": event["message"], "vm_id": vm_id}
 
     @app.put("/api/pool/{pool}")
-    async def api_pool(pool: str, body: dict = Body(...)):  # noqa: B008 -- fastapi.Body
-        _demo_only()
+    async def api_pool(pool: str, request: Request, body: dict = Body(...)):  # noqa: B008
+        _demo_only(request)
         current = await asyncio.to_thread(deps.registry.get_policy, pool)
         if current is None:
             raise HTTPException(404, f"pool {pool!r} has no policy")
