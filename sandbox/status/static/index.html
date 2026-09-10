@@ -1,5 +1,281 @@
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sandbox Fleet</title>
-<h1>Sandbox Fleet</h1>
-<p>Dashboard arrives in Task 4.</p>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1c1f26; --muted: #6b7280; --line: #e3e6eb;
+    --ok: #15803d; --warn: #b45309; --bad: #b91c1c; --accent: #2563eb; --chip: #eef2ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #171a21; --ink: #e5e7eb; --muted: #9ca3af; --line: #2a2f3a;
+      --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --accent: #60a5fa; --chip: #1e2533;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 16px; padding: 12px 20px;
+           border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  #live { margin-left: auto; font-size: 12px; }
+  #live::before { content: "●"; margin-right: 6px; color: var(--bad); }
+  #live.on::before { color: var(--ok); }
+  .counters { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+              gap: 10px; padding: 12px 20px; }
+  .counter { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+             padding: 10px 12px; }
+  .counter .n { font-size: 24px; font-weight: 600; }
+  .counter .l { color: var(--muted); font-size: 12px; text-transform: uppercase; }
+  main { display: grid; gap: 14px; padding: 0 20px 20px; }
+  .row2 { display: grid; grid-template-columns: 3fr 2fr; gap: 14px; }
+  @media (max-width: 1100px) { .row2 { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+            padding: 12px 14px; min-width: 0; }
+  section h2 { font-size: 13px; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-top: 1px solid var(--line);
+           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 380px; }
+  th { color: var(--muted); font-weight: 500; border-top: 0; }
+  .tablewrap { overflow-x: auto; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--chip);
+          font-size: 12px; }
+  .s-idle { color: var(--ok); } .s-leased { color: var(--accent); }
+  .s-booting, .s-recycling, .s-draining { color: var(--warn); }
+  .s-terminated, .s-dead { color: var(--bad); }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  button { font: inherit; font-size: 12px; padding: 2px 8px; border-radius: 6px;
+           border: 1px solid var(--line); background: var(--chip); color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  #events { max-height: 420px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 12px; }
+  #events div { padding: 3px 0; border-top: 1px solid var(--line); display: grid;
+                grid-template-columns: 70px 90px 130px 110px 1fr; gap: 8px; }
+  #events .t { color: var(--muted); }
+  canvas { width: 100%; height: 90px; display: block; }
+  #drawer { position: fixed; right: 0; top: 0; bottom: 0; width: min(720px, 90vw);
+            background: var(--panel); border-left: 1px solid var(--line); padding: 14px;
+            display: none; flex-direction: column; box-shadow: -8px 0 24px rgba(0,0,0,.2); }
+  #drawer.open { display: flex; }
+  #drawer pre { flex: 1; overflow: auto; margin: 8px 0 0; font-size: 12px; white-space: pre-wrap; }
+  #policy { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+  #policy input { width: 56px; font: inherit; padding: 2px 6px; border-radius: 6px;
+                  border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sandbox Fleet</h1>
+  <span class="meta" id="meta">loading…</span>
+  <span id="policy" hidden>
+    floor <input id="min_idle" type="number" min="0"> max <input id="max" type="number" min="1">
+    <button id="apply">apply</button>
+  </span>
+  <span id="live">connecting</span>
+</header>
+
+<div class="counters" id="counters"></div>
+
+<main>
+  <div class="row2">
+    <section>
+      <h2>VMs</h2>
+      <div class="tablewrap"><table id="vms"><thead><tr>
+        <th>vm</th><th>state</th><th>hb</th><th>provider</th><th>version</th>
+        <th>current job</th><th>owner workflow</th><th></th>
+      </tr></thead><tbody></tbody></table></div>
+    </section>
+    <section>
+      <h2>Control plane events</h2>
+      <div id="events"></div>
+    </section>
+  </div>
+  <section>
+    <h2>Jobs</h2>
+    <div class="tablewrap"><table id="jobs"><thead><tr>
+      <th>job</th><th>vm</th><th>argv</th><th>status</th><th>started</th><th>duration</th>
+      <th>exit</th><th></th>
+    </tr></thead><tbody></tbody></table></div>
+  </section>
+  <section>
+    <h2>Sessions</h2>
+    <div class="tablewrap"><table id="sessions"><thead><tr>
+      <th>session</th><th>scenario</th><th>turns</th><th>tests</th><th>lint</th><th>cost</th>
+      <th>vms</th><th>patch</th><th>workflow</th>
+    </tr></thead><tbody></tbody></table></div>
+  </section>
+  <section>
+    <h2>idle / leased / pending, last 15 minutes</h2>
+    <canvas id="spark" height="90"></canvas>
+  </section>
+</main>
+
+<div id="drawer">
+  <div style="display:flex;gap:8px;align-items:center">
+    <strong id="drawer-title"></strong>
+    <button id="drawer-stderr">stderr</button>
+    <button id="drawer-close" style="margin-left:auto">close</button>
+  </div>
+  <pre id="drawer-body"></pre>
+</div>
+
+<script>
+(() => {
+  const $ = (sel) => document.querySelector(sel);
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const short = (id) => id.length > 28 ? id.slice(0, 26) + "…" : id;
+  const ago = (s) => s == null ? "" : s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s/60)}m` : `${Math.floor(s/3600)}h`;
+  const when = (iso) => iso ? iso.slice(11, 19) : "";
+  let config = { demo_mode: false, temporal_ui: "", temporal_namespace: "default" };
+  let drawer = { vm: "", job: "", stream: "stdout" };
+
+  async function json(url, opts) {
+    const r = await fetch(url, opts);
+    if (!r.ok) throw new Error(`${url}: ${r.status}`);
+    return r.json();
+  }
+
+  function renderCounters(fleet) {
+    const c = fleet.counts;
+    const items = [["Total", c.total], ["Idle", c.idle], ["Leased", c.leased], ["Booting", c.booting],
+                   ["Draining", c.draining], ["Dead", c.dead], ["Pending", c.pending]];
+    $("#counters").innerHTML = items.map(([l, n]) =>
+      `<div class="counter"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+    const pol = fleet.policy ? `floor ${fleet.policy.min_idle} · max ${fleet.policy.max}` : "no policy";
+    const src = fleet.source === "sample" ? `sampled ${when(fleet.sample_at)}` : "counted from rows";
+    $("#meta").textContent = `pool ${config.pool} · provider ${config.provider} · ${pol} · ${src}`;
+    if (config.demo_mode && fleet.policy && document.activeElement.tagName !== "INPUT") {
+      $("#min_idle").value = fleet.policy.min_idle; $("#max").value = fleet.policy.max;
+    }
+  }
+
+  function renderVms(vms) {
+    $("#vms tbody").innerHTML = vms.map((v) => {
+      const owner = v.owner_workflow_id
+        ? `<a href="${esc(v.owner_link)}" target="_blank">${esc(short(v.owner_workflow_id))}</a>
+           <span class="chip">${esc(v.owner_status ?? "?")}</span>` : `<span class="muted">—</span>`;
+      const job = v.current_job ? `<span title="${esc(v.current_job.argv_summary)}">${esc(short(v.current_job.job_id))}</span>`
+                                : `<span class="muted">—</span>`;
+      const chaos = config.demo_mode ? ["kill", "stop", "delete"].map((a) =>
+        `<button data-chaos="${a}" data-vm="${esc(v.vm_id)}">${a}</button>`).join(" ") : "";
+      return `<tr><td>${esc(v.vm_id)}</td><td class="s-${esc(v.state)}">${esc(v.state)}</td>
+        <td>${ago(v.heartbeat_age_seconds)}</td><td>${esc(v.provider_state)}</td>
+        <td>${esc(v.agent_version)}</td><td>${job}</td><td>${owner}</td><td>${chaos}</td></tr>`;
+    }).join("") || `<tr><td colspan="8" class="muted">no VMs registered</td></tr>`;
+  }
+
+  function renderJobs(jobs) {
+    $("#jobs tbody").innerHTML = jobs.map((j) => {
+      const exit = j.exit_code == null ? "" : `<span class="${j.exit_code === 0 ? "ok" : "bad"}">${j.exit_code}</span>`;
+      const dur = j.duration_seconds == null ? "" : `${Number(j.duration_seconds).toFixed(1)}s`;
+      const log = j.log_uri ? `<button data-log="${esc(j.job_id)}" data-vm="${esc(j.vm_id)}">log</button>` : "";
+      return `<tr><td title="${esc(j.job_id)}">${esc(short(j.job_id))}</td><td>${esc(j.vm_id)}</td>
+        <td title="${esc(j.argv_summary)}">${esc(j.argv_summary)}</td><td>${esc(j.status)}</td>
+        <td>${when(j.started_at)}</td><td>${dur}</td><td>${exit}</td><td>${log}</td></tr>`;
+    }).join("") || `<tr><td colspan="8" class="muted">no jobs yet</td></tr>`;
+  }
+
+  function renderSessions(sessions) {
+    $("#sessions tbody").innerHTML = sessions.map((s) => {
+      const tests = `<span class="${s.tests_passed ? "ok" : "bad"}">${s.tests_total - s.tests_failed}/${s.tests_total}</span>`;
+      return `<tr><td title="${esc(s.prompt)}">${esc(s.session_id)}</td><td>${esc(s.scenario)}</td>
+        <td>${s.turns}</td><td>${tests}</td><td>${s.lint_count}</td><td>$${s.fake_cost_usd.toFixed(4)}</td>
+        <td>${esc(s.vm_ids.join(", "))}</td><td class="muted" title="${esc(s.patch_uri)}">${esc(s.patch_uri.split("/").slice(-2).join("/"))}</td>
+        <td><a href="${esc(s.workflow_link)}" target="_blank">${esc(short(s.workflow_id))}</a></td></tr>`;
+    }).join("") || `<tr><td colspan="9" class="muted">no sessions yet</td></tr>`;
+  }
+
+  function renderSpark(points) {
+    const canvas = $("#spark"); const ctx = canvas.getContext("2d");
+    const w = canvas.width = canvas.clientWidth * devicePixelRatio, h = canvas.height = 90 * devicePixelRatio;
+    ctx.clearRect(0, 0, w, h);
+    if (points.length < 2) { ctx.fillStyle = getComputedStyle(document.body).getPropertyValue("--muted");
+      ctx.font = `${12 * devicePixelRatio}px system-ui`; ctx.fillText("waiting for two samples…", 10, 20 * devicePixelRatio); return; }
+    const max = Math.max(1, ...points.map((p) => Math.max(p.idle, p.leased, p.pending)));
+    const series = [["idle", "--ok"], ["leased", "--accent"], ["pending", "--warn"]];
+    for (const [key, color] of series) {
+      ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue(color); ctx.lineWidth = 2 * devicePixelRatio;
+      ctx.beginPath();
+      points.forEach((p, i) => { const x = (i / (points.length - 1)) * (w - 8) + 4;
+        const y = h - 6 - (p[key] / max) * (h - 12); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.stroke();
+    }
+  }
+
+  function addEvent(e) {
+    const box = $("#events");
+    const div = document.createElement("div");
+    div.innerHTML = `<span class="t">${when(e.ts)}</span><span>${esc(e.actor)}</span>
+      <span>${esc(e.type)}</span><span>${esc(e.vm_id)}</span><span title="${esc(JSON.stringify(e.details))}">${esc(e.message)}</span>`;
+    box.prepend(div);
+    while (box.children.length > 200) box.lastChild.remove();
+  }
+
+  async function openLog(vm, job, stream) {
+    drawer = { vm, job, stream };
+    $("#drawer-title").textContent = `${job} · ${stream}`;
+    $("#drawer-stderr").textContent = stream === "stdout" ? "stderr" : "stdout";
+    $("#drawer").classList.add("open");
+    try {
+      const r = await fetch(`/api/jobs/${encodeURIComponent(vm)}/${encodeURIComponent(job)}/log?stream=${stream}&tail=16384`);
+      $("#drawer-body").textContent = r.ok ? await r.text() : `(${r.status}) ${await r.text()}`;
+      $("#drawer-body").scrollTop = $("#drawer-body").scrollHeight;
+    } catch (err) { $("#drawer-body").textContent = String(err); }
+  }
+
+  document.addEventListener("click", async (ev) => {
+    const b = ev.target.closest("button"); if (!b) return;
+    if (b.dataset.log) return openLog(b.dataset.vm, b.dataset.log, "stdout");
+    if (b.id === "drawer-close") return $("#drawer").classList.remove("open");
+    if (b.id === "drawer-stderr") return openLog(drawer.vm, drawer.job, drawer.stream === "stdout" ? "stderr" : "stdout");
+    if (b.dataset.chaos) {
+      if (!confirm(`${b.dataset.chaos} ${b.dataset.vm}?`)) return;
+      const r = await fetch(`/api/chaos/${encodeURIComponent(b.dataset.vm)}/${b.dataset.chaos}`, { method: "POST" });
+      if (!r.ok) alert(`${r.status}: ${await r.text()}`);
+    }
+    if (b.id === "apply") {
+      const body = { min_idle: Number($("#min_idle").value), max: Number($("#max").value) };
+      const r = await fetch(`/api/pool/${encodeURIComponent(config.pool)}`, { method: "PUT",
+        headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      if (!r.ok) alert(`${r.status}: ${await r.text()}`);
+    }
+  });
+
+  async function refresh() {
+    try {
+      const [vms, jobs, sessions, samples] = await Promise.all([
+        json("/api/vms"), json("/api/jobs?limit=30"), json("/api/sessions?limit=15"), json("/api/samples?minutes=15")]);
+      renderVms(vms); renderJobs(jobs); renderSessions(sessions); renderSpark(samples);
+    } catch (err) { console.warn(err); }
+  }
+
+  function connect() {
+    const es = new EventSource("/api/events");
+    es.onopen = () => { $("#live").textContent = "live"; $("#live").classList.add("on"); };
+    es.onerror = () => { $("#live").textContent = "reconnecting"; $("#live").classList.remove("on"); };
+    es.addEventListener("fleet", (m) => renderCounters(JSON.parse(m.data)));
+    es.addEventListener("control", (m) => { addEvent(JSON.parse(m.data)); refreshSoon(); });
+  }
+
+  let pending = null;
+  function refreshSoon() { if (pending) return; pending = setTimeout(() => { pending = null; refresh(); }, 300); }
+
+  (async () => {
+    config = await json("/api/config");
+    if (config.demo_mode) $("#policy").hidden = false;
+    renderCounters(await json("/api/fleet"));
+    $("#events").replaceChildren();
+    await refresh();
+    connect();
+    setInterval(refresh, 2000);
+  })();
+})();
+</script>
+</body>
+</html>

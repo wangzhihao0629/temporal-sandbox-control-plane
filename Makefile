@@ -13,7 +13,7 @@ test:
 lint:
 	$(UV) run ruff check sandbox tests
 
-.PHONY: up down workers smoke vm vms show
+.PHONY: up down workers status smoke vm vms show
 
 up:
 	./scripts/up.sh
@@ -23,6 +23,9 @@ down:
 
 workers:
 	$(UV) run honcho start
+
+status:
+	$(UV) run python -m sandbox.status.api
 
 smoke:
 	$(UV) run python -m sandbox.orchestrator.run_smoke

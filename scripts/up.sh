@@ -87,6 +87,8 @@ AWS_SECRET_ACCESS_KEY=localsecret
 AWS_DEFAULT_REGION=us-east-1
 SANDBOX_VM_IMAGE=sandbox-vm:dev
 SANDBOX_PROFILE=local
+STATUS_PORT=8600
+STATUS_DEMO_MODE=1
 # SANDBOX_RECONCILE_DISABLED=1
 # SANDBOX_RECONCILE_INTERVAL_SECONDS=15
 EOF
@@ -95,3 +97,4 @@ echo "==> wrote .env (moto 127.0.0.1:${MOTO_PORT}, vm gateway ${GATEWAY})"
 echo "==> tables and buckets"
 uv run python -m sandbox.bootstrap
 echo "==> up. next: make image (once), make workers, make smoke  (the reconciler launches VMs; make vm is a manual override)"
+echo "    dashboard http://localhost:8600 (make workers starts it)"
