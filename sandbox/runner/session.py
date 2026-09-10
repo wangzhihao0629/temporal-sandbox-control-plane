@@ -113,6 +113,8 @@ def run_turn(
     if state is None:
         raise RuntimeError("no session state; run clone first")
     n = state.turn + 1
+    # The trailing colon terminates the prefix, so "^turn 1:" cannot match a
+    # commit message starting "turn 10:" and turn numbers never collide.
     recovered = git("log", "--format=%H", "-n", "1", f"--grep=^turn {n}:", cwd=workspace)
     if recovered:
         state.turn = n

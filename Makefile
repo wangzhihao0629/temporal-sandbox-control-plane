@@ -46,12 +46,19 @@ image:
 artifact:
 	$(UV) run python -m sandbox.runner.package
 
-.PHONY: demo chaos-kill chaos-stop chaos-delete policy reconcile hold terminate
+.PHONY: demo session chaos-kill chaos-stop chaos-delete policy reconcile hold terminate
 
 SECONDS ?= 120
 
 demo:
-	./scripts/demo.sh
+	SCENARIO=$(SCENARIO) ./scripts/demo.sh
+
+session:
+	$(UV) run python -m sandbox.orchestrator.run_session \
+	  $(if $(SCENARIO),--scenario $(SCENARIO)) \
+	  $(if $(PROMPT),--prompt "$(PROMPT)") \
+	  $(if $(TURNS),--max-turns $(TURNS)) \
+	  $(if $(TURN_SECONDS),--turn-seconds $(TURN_SECONDS))
 
 chaos-kill:
 	$(UV) run python -m sandbox.manager.chaos kill $(VM)

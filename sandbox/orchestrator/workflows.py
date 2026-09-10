@@ -203,10 +203,11 @@ class CodingSessionDemoWorkflow:
                         )
                         cost += float(turn.get("fake_cost_usd", 0.0))
                         lint = await run_step(vm, uris, lint_spec(ctx, uris, turn_no))
-                        report = await run_step(vm, uris, test_spec(ctx, uris, turn_no))
+                        test = test_spec(ctx, uris, turn_no)
+                        report = await run_step(vm, uris, test)
                         if report["failed"] == 0 or int(turn["turn"]) >= p.max_turns:
                             break
-                        feedback_uri = uris.envelope(test_spec(ctx, uris, turn_no).job_id)
+                        feedback_uri = uris.envelope(test.job_id)
                     await run_step(vm, uris, export_spec(ctx, uris, turn_no))
                     patch = await vm.get_file(f"{ctx.workspace}/session.patch", uris.patch)
                     summary = SessionSummary(
