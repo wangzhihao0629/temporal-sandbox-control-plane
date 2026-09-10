@@ -15,9 +15,12 @@ dev = [
   "moto[dynamodb,s3]>=5",
   "ruff>=0.6",
   "honcho>=2",
+  "httpx>=0.27",
 ]
 local = [
   "moto[server]>=5",
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
 ]
 runner = [
   "pytest>=8",
