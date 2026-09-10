@@ -7,8 +7,11 @@ Why: dependencies come in through `Deps` so the tests hand in moto-backed
 fakes and the host process hands in the real clients. Every blocking call
 (boto3, the `container` CLI behind `provider.list()`) runs in a thread so a
 slow provider never stalls the event loop, and the provider listing is cached
-for a couple of seconds because the page polls that often. Read-only, except
-two demo endpoints that Task 3 adds behind `STATUS_DEMO_MODE=1`.
+for a couple of seconds because the page polls that often. `/api/jobs` stays
+a full scan of the registry (it has no better index), but the page polls it
+with `limit=30` and the demo's job count stays in the hundreds, so this is
+fine. Read-only, except two demo endpoints that Task 3 adds behind
+`STATUS_DEMO_MODE=1`.
 Production: an internal dashboard app over the same API, with the Temporal client and
 IAM role of the platform.
 """
@@ -203,20 +206,50 @@ async def leases(deps: Deps) -> list[dict]:
 
 
 async def sessions(deps: Deps, limit: int) -> list[dict]:
+    """Session views from `summary.json` objects, parsed once per URI and then cached.
+
+    A summary object is immutable once written, so `deps._cache["summaries"]` (URI ->
+    view dict) only needs a GET the first time a URI is seen; later polls LIST again (to
+    pick up new sessions and drop ones no longer listed) but skip the GET for URIs
+    already cached.
+    """
+
     async def _summary(uri: str) -> dict | None:
         try:
             data = await asyncio.to_thread(deps.store.get_json, uri)
-        except (json.JSONDecodeError, TypeError, AttributeError, FileNotFoundError):
+            if not isinstance(data, dict):
+                return None
+            return joins.session_view(data)
+        except (
+            json.JSONDecodeError,
+            TypeError,
+            AttributeError,
+            FileNotFoundError,
+            ValueError,
+            KeyError,
+        ):
             return None
-        return data if isinstance(data, dict) else None
 
     uris = await asyncio.to_thread(deps.store.list, SESSION_PREFIX)
-    summaries = await asyncio.gather(*(_summary(u) for u in uris if u.endswith("/summary.json")))
-    views = [joins.session_view(s) for s in summaries if s is not None]
-    for view in views:
+    session_uris = [u for u in uris if u.endswith("/summary.json")]
+    cache: dict[str, dict] = deps._cache.setdefault("summaries", {})
+    missing = [u for u in session_uris if u not in cache]
+    fetched = await asyncio.gather(*(_summary(u) for u in missing))
+    for uri, view in zip(missing, fetched, strict=True):
+        if view is not None:
+            cache[uri] = view
+    for uri in list(cache):
+        if uri not in session_uris:
+            del cache[uri]
+    views = []
+    for uri in session_uris:
+        if uri not in cache:
+            continue
+        view = dict(cache[uri])
         view["workflow_link"] = joins.temporal_link(
             deps.temporal_ui, deps.temporal_namespace, view["workflow_id"]
         )
+        views.append(view)
     views.sort(key=lambda v: v["finished_at"], reverse=True)
     return views[:limit]
 

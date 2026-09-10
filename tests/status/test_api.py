@@ -369,6 +369,62 @@ def test_sessions_skips_a_summary_deleted_between_list_and_read(client, backend,
     assert {s["session_id"] for s in r.json()} == {"s0", "s1"}
 
 
+def test_sessions_only_reads_a_summary_once_across_polls(client, backend, monkeypatch):
+    _, store = backend
+    for sid, ts in [("s0", "2026-09-10T01:00:00.000Z"), ("s1", "2026-09-10T02:00:00.000Z")]:
+        store.put_json(
+            f"s3://sandbox-out/{sid}/summary.json",
+            {
+                "session_id": sid,
+                "turns": 1,
+                "tests_passed": True,
+                "finished_at": ts,
+                "workflow_id": f"session-{sid}",
+            },
+        )
+    deps = client.app.state.deps
+    calls: list[str] = []
+    real_get_json = deps.store.get_json
+
+    def counting_get_json(uri):
+        calls.append(uri)
+        return real_get_json(uri)
+
+    monkeypatch.setattr(deps.store, "get_json", counting_get_json)
+    first = client.get("/api/sessions").json()
+    second = client.get("/api/sessions").json()
+    assert [s["session_id"] for s in first] == ["s1", "s0"]
+    assert [s["session_id"] for s in second] == ["s1", "s0"]
+    assert calls.count("s3://sandbox-out/s0/summary.json") == 1
+    assert calls.count("s3://sandbox-out/s1/summary.json") == 1
+
+
+def test_sessions_skips_a_summary_with_a_non_numeric_turns(client, backend):
+    _, store = backend
+    store.put_json(
+        "s3://sandbox-out/good/summary.json",
+        {
+            "session_id": "good",
+            "turns": 1,
+            "tests_passed": True,
+            "finished_at": "2026-09-10T02:00:00.000Z",
+            "workflow_id": "session-good",
+        },
+    )
+    store.put_json(
+        "s3://sandbox-out/bad/summary.json",
+        {
+            "session_id": "bad",
+            "turns": "two",
+            "tests_passed": True,
+            "finished_at": "2026-09-10T03:00:00.000Z",
+            "workflow_id": "session-bad",
+        },
+    )
+    sessions = client.get("/api/sessions").json()
+    assert [s["session_id"] for s in sessions] == ["good"]
+
+
 def test_demo_endpoints_are_refused_unless_enabled(client):
     assert client.post("/api/chaos/sbx-a/kill").status_code == 403
     assert client.put("/api/pool/demo", json={"max": 3}).status_code == 403
