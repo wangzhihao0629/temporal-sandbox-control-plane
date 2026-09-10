@@ -88,7 +88,9 @@ def clone(
         session_id = session_uri.rstrip("/").rsplit("/", 1)[-1]
         state = SessionState(session_id=session_id, repo=repo, base_commit=head)
         save_state(store, session_uri, state)
-    return CloneEnvelope(ok=True, source=source, head=head, turn=state.turn)
+    return CloneEnvelope(
+        ok=True, source=source, head=head, turn=state.turn, scenario=state.scenario
+    )
 
 
 def save_bundle(store: ObjectStore, workspace: Path, session_uri: str) -> None:

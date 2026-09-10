@@ -14,9 +14,58 @@ from sandbox.manager.activities import ManagerActivities
 from sandbox.orchestrator.activities import OrchestratorActivities
 from sandbox.orchestrator.steps import SessionUris
 from sandbox.orchestrator.workflows import CodingSessionDemoWorkflow
+from sandbox.runner.cli import main
 from sandbox.testing.inprocess_vm import InProcessVm
 from sandbox.testing.stubs import StubProvider
 from tests.integration.conftest import session_params
+
+
+def _seed_session(store, sid, seed_root, tmp_path, scenario, turns):
+    """Pre-populate a session's bundle and state by running the runner CLI
+    in-process, as if a previous lease had already completed some turns."""
+    uris = SessionUris(sid)
+    ws = tmp_path / f"seed-{sid}"
+    assert (
+        main(
+            [
+                "clone",
+                "--repo",
+                "hello",
+                "--workspace",
+                str(ws),
+                "--session-uri",
+                uris.session,
+                "--seed-root",
+                str(seed_root),
+                "--envelope-uri",
+                f"{uris.session}/steps/seed-clone.json",
+            ]
+        )
+        == 0
+    )
+    for n in range(1, turns + 1):
+        assert (
+            main(
+                [
+                    "turn",
+                    "--workspace",
+                    str(ws),
+                    "--session-uri",
+                    uris.session,
+                    "--prompt",
+                    "x",
+                    "--scenario",
+                    scenario,
+                    "--feedback-uri",
+                    "none",
+                    "--seconds",
+                    "0",
+                    "--envelope-uri",
+                    f"{uris.session}/steps/seed-turn-{n}.json",
+                ]
+            )
+            == 0
+        )
 
 
 @pytest.fixture
@@ -126,6 +175,46 @@ async def test_max_turns_exhaustion_is_a_result_not_an_error(
     summary = store.get_json(result.summary_uri)
     assert summary["tests_passed"] is False and summary["turns"] == 2
     assert store.exists(SessionUris(sid).patch), "exported anyway"
+
+
+async def test_a_resumed_session_verifies_the_restored_turn_before_adding_one(
+    env, aws_server, session_workers, vm, runner_artifact, seed_root, tmp_path
+):
+    _, store = aws_server
+    sid = f"resume-verify-{uuid.uuid4().hex[:6]}"
+    _seed_session(store, sid, seed_root, tmp_path, "never-fixes", 2)
+    result = await _run(
+        env,
+        session_params(
+            sid, runner_artifact, seed_root, tmp_path / "ws", scenario="never-fixes", max_turns=2
+        ),
+    )
+    assert result.turns == 2 and result.tests_passed is False and result.attempts == 1
+    uris = SessionUris(sid)
+    assert store.exists(uris.envelope(f"{sid}-lint-t2-a1"))
+    assert store.exists(uris.envelope(f"{sid}-test-t2-a1"))
+    assert not store.exists(uris.envelope(f"{sid}-turn-t3-a1"))
+    summary = store.get_json(result.summary_uri)
+    assert summary["scenario"] == "never-fixes"
+
+
+async def test_a_resumed_session_whose_turn_already_passed_runs_no_new_turn(
+    env, aws_server, session_workers, vm, runner_artifact, seed_root, tmp_path
+):
+    _, store = aws_server
+    sid = f"resume-done-{uuid.uuid4().hex[:6]}"
+    _seed_session(store, sid, seed_root, tmp_path, "multiply-with-bug", 2)
+    result = await _run(
+        env,
+        session_params(
+            sid, runner_artifact, seed_root, tmp_path / "ws", scenario="multiply-with-bug"
+        ),
+    )
+    assert result.turns == 2 and result.tests_passed
+    uris = SessionUris(sid)
+    assert not store.exists(uris.envelope(f"{sid}-turn-t3-a1"))
+    patch = store.get_bytes(uris.patch).decode()
+    assert "+    return a * b" in patch
 
 
 async def _wait_for_running_job(registry, vm_id, job_id, seconds=30):

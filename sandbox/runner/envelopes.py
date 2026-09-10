@@ -32,6 +32,7 @@ class CloneEnvelope(_Envelope):
     source: str = ""
     head: str = ""
     turn: int = 0
+    scenario: str = ""
     error: str = ""
     kind: str = "clone"
 

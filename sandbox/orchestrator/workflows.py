@@ -160,7 +160,8 @@ class CodingSessionDemoWorkflow:
     activity. Losing the VM mid-session costs the interrupted turn: the next
     lease clones the bundle the runner saved after the previous turn and the
     turn counter continues, because the counter lives in session.json, not
-    here.
+    here. A resumed session verifies the restored turn's lint and test before
+    deciding whether another turn is needed, instead of always starting one.
     """
 
     @workflow.run
@@ -185,7 +186,22 @@ class CodingSessionDemoWorkflow:
                     )
                     clone = await run_step(vm, uris, clone_spec(ctx, uris, p.repo))
                     turn_no = int(clone["turn"])
-                    while True:
+                    scenario = clone.get("scenario") or p.scenario
+                    turn: dict = {}
+                    lint: dict = {}
+                    report: dict = {}
+                    done = False
+                    if turn_no > 0:
+                        # The previous lease persisted this turn but this workflow never
+                        # saw its verification: check it before deciding whether another
+                        # turn is needed.
+                        lint = await run_step(vm, uris, lint_spec(ctx, uris, turn_no))
+                        test = test_spec(ctx, uris, turn_no)
+                        report = await run_step(vm, uris, test)
+                        done = report["failed"] == 0 or turn_no >= p.max_turns
+                        if not done:
+                            feedback_uri = uris.envelope(test.job_id)
+                    while not done:
                         turn_no += 1
                         turn = await run_step(
                             vm,
@@ -202,19 +218,20 @@ class CodingSessionDemoWorkflow:
                             ),
                         )
                         cost += float(turn.get("fake_cost_usd", 0.0))
+                        scenario = turn.get("scenario") or scenario
                         lint = await run_step(vm, uris, lint_spec(ctx, uris, turn_no))
                         test = test_spec(ctx, uris, turn_no)
                         report = await run_step(vm, uris, test)
-                        if report["failed"] == 0 or int(turn["turn"]) >= p.max_turns:
-                            break
-                        feedback_uri = uris.envelope(test.job_id)
+                        done = report["failed"] == 0 or int(turn["turn"]) >= p.max_turns
+                        if not done:
+                            feedback_uri = uris.envelope(test.job_id)
                     await run_step(vm, uris, export_spec(ctx, uris, turn_no))
                     patch = await vm.get_file(f"{ctx.workspace}/session.patch", uris.patch)
                     summary = SessionSummary(
                         session_id=p.session_id,
                         prompt=p.prompt,
-                        scenario=turn.get("scenario", p.scenario),
-                        turns=int(turn["turn"]),
+                        scenario=scenario,
+                        turns=turn_no,
                         tests_passed=report["failed"] == 0,
                         tests_failed=int(report["failed"]),
                         tests_total=int(report["total"]),
