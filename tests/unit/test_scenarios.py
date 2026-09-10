@@ -6,10 +6,17 @@ import sys
 from pathlib import Path
 
 import pytest
-from sandbox.runner.checks import run_pytest, run_ruff
-from sandbox.runner.scenarios import DEFAULT_SCENARIO, SCENARIOS, pick_scenario
 
 from sandbox.runner import agent
+from sandbox.runner.checks import run_pytest, run_ruff
+from sandbox.runner.scenarios import (
+    DEFAULT_SCENARIO,
+    SCENARIOS,
+    Scenario,
+    Step,
+    Turn,
+    pick_scenario,
+)
 
 SEED = Path(__file__).resolve().parents[2] / "images" / "vm" / "seed" / "hello"
 
@@ -89,3 +96,15 @@ def test_claude_turn_without_the_cli_is_a_broken_turn(workspace, monkeypatch):
     monkeypatch.setattr(agent.shutil, "which", lambda _name: None)
     outcome = agent.run_claude_turn(workspace, "add divide", None, 0, out=io.StringIO())
     assert not outcome.ok and "claude" in outcome.error
+
+
+def test_run_fake_turn_rejects_an_unknown_step_kind(workspace):
+    scenario = Scenario(
+        "bad-step",
+        (),
+        "an unknown step kind is a broken turn, not a KeyError",
+        (Turn(summary="dance", steps=(Step("dance"),), tests_pass=True, lint_findings=0),),
+    )
+    outcome = agent.run_fake_turn(workspace, scenario, 1, 0, None, out=io.StringIO())
+    assert not outcome.ok
+    assert "unknown step kind" in outcome.error

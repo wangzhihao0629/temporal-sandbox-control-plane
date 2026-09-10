@@ -81,7 +81,7 @@ def run_fake_turn(
     for line in describe_feedback(feedback):
         print(line, file=out, flush=True)
     for step in script.steps:
-        cost += COST_USD[step.kind]
+        cost += COST_USD.get(step.kind, 0.0)
         if step.kind == "read":
             path = workspace / step.target
             count = len(path.read_text().splitlines()) if path.exists() else 0
