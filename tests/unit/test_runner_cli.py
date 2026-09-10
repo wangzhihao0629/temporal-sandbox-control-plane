@@ -125,14 +125,17 @@ def test_clone_resumes_from_the_bundle_on_a_fresh_workspace(store, seed_root, tm
 def test_turn_recovers_a_commit_the_state_missed(store, seed_root, tmp_path):
     ws = tmp_path / "ws"
     assert _clone(ws, seed_root) == 0 and _turn(ws, "t1") == 0
-    # The bundle got ahead of session.json: roll the state back one turn.
+    # The bundle got ahead of session.json: roll the state back one turn, and
+    # clear the recorded scenario too, as if this state predated it.
     state = session.load_state(store, SESSION)
     state.turn = 0
+    state.scenario = ""
     session.save_state(store, SESSION, state)
     assert _turn(ws, "t1-again") == 0
     again = _env(store, "t1-again")
     assert again["turn"] == 1 and again["summary"] == "recovered from bundle"
     assert again["commit"] == _env(store, "t1")["commit"]
+    assert again["scenario"] == "multiply-with-bug"
     assert session.load_state(store, SESSION).turn == 1
 
 

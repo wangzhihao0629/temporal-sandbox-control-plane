@@ -127,7 +127,7 @@ def run_turn(
             turn=n,
             commit=recovered,
             summary="recovered from bundle",
-            scenario=state.scenario,
+            scenario=state.scenario or pick_scenario(scenario_name, prompt).name,
         )
     feedback = None
     if feedback_uri and feedback_uri != "none":
