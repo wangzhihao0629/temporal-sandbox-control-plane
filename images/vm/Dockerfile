@@ -39,9 +39,13 @@ RUN python3 -m venv /opt/sandbox/venv \
 
 # Seed repositories the demo clones from, so a session works offline. Built by
 # the same code the tests use, so the image and the tests agree on the seed.
+# Git refuses to read a repository owned by another user (its safe.directory
+# check), so permissions alone are not enough — the seed is handed to agent,
+# the user that actually clones it.
 COPY images/vm/seed /opt/sandbox/seed
 RUN /opt/sandbox/venv/bin/python -m sandbox.runner.seed /opt/sandbox/seed /srv/repos \
- && chmod -R a+rX /srv/repos
+ && chmod -R a+rX /srv/repos \
+ && chown -R agent:agent /srv/repos
 
 # Dummy secrets so ExecSpec.secrets=["github_token"] resolves locally. In
 # production these are written by the host's token refresher.
