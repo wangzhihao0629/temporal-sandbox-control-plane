@@ -5,7 +5,9 @@ user, no sudo, and a secrets directory holding dummy values.
 Why: the reconciler's FakeProvider and the integration tests both need a VM
 that boots in milliseconds and dies on command; keeping one implementation in
 the package means the provider used in tests is the real `AgentRuntime`, not a
-stub of it.
+stub of it. Two VMs that share a `workspace_root` stand in for a real fleet,
+where every VM has the same paths, which the session tests need to re-lease a
+session onto another VM.
 Production: not deployed. The VM image runs `sandbox.vm_agent.worker` instead.
 """
 
@@ -26,6 +28,7 @@ class InProcessVm:
         tmp_path: Path,
         vm_id: str | None = None,
         pool="demo",
+        workspace_root: Path | None = None,
     ):
         self.vm_id = vm_id or f"sbx-{uuid.uuid4().hex[:8]}"
         base = tmp_path / self.vm_id
@@ -33,7 +36,7 @@ class InProcessVm:
         secrets.mkdir(parents=True, exist_ok=True)
         (secrets / "github_token").write_text("dummy-github-token\n")
         (secrets / "llm_gateway").write_text("dummy-llm-key\n")
-        self.workspace_root = base / "ws"
+        self.workspace_root = Path(workspace_root) if workspace_root else base / "ws"
         self.started_at: str = ""
         self.cfg = AgentConfig(
             vm_id=self.vm_id,
