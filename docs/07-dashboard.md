@@ -27,7 +27,8 @@ Two things on the page only appear when `/api/config` reports
 `demo_mode: true`: the `kill`/`stop`/`delete` buttons on each VM row, and the
 pool-floor/max edit box in the header. `/api/leases` exists and is exercised
 by `tests/status/test_api.py`, but nothing in `index.html` calls it — the
-VMs table already carries lease id and owner per row, so the page never
+VMs table already carries owner per row (the underlying `vm_view` join
+includes `lease_id` too, but the page never renders it), so the page never
 needs the separate listing.
 
 ## The API
@@ -62,10 +63,12 @@ separate `/api/fleet` request.
 `POST /api/chaos/...` and `PUT /api/pool/...` are the only writes, gated by
 `_demo_only`: it 403s unless `STATUS_DEMO_MODE=1` was set when the process
 started (`make up` writes it into `.env`), and it 403s again unless the
-request carries `X-Sandbox-Demo: 1`. That second check is the CSRF guard —
-a plain HTML form or an `<img>`/link from another page cannot attach a
-custom header, so only same-origin script (or a deliberate `curl`) can ever
-satisfy it, regardless of what `demo_mode` allows.
+request carries `X-Sandbox-Demo: 1`. That second check is the CSRF guard: a
+plain HTML form (or an image or link) cannot attach a custom header at all,
+and a cross-origin script that tries to would trigger a CORS preflight this
+app never approves (no CORS middleware is configured), so the browser blocks
+the write before it reaches `_demo_only`. Only same-origin script or a
+deliberate `curl` can get the header through.
 
 ## Joins, not state
 

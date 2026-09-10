@@ -155,11 +155,11 @@ clone, lint, test, the loop, and export are unchanged.
 
 `workflows.py` names its real callers directly: `ProductionAgentWorkflow` and
 `ProductionCodingWorkflow`. `steps.py`, `checks.py`, and `session.py` each call
-themselves identical in production, over real S3 instead of moto. The
-artifact changes shape: today it carries only the runner because the image
-already has its dependencies (`runner/__init__.py`); in production it is a
-per-commit virtualenv holding the real harness, built in CI, the image
-supplying only the interpreter (`package.py`).
+themselves identical in production, over real S3 instead of moto. `package.py`
+says the artifact changes shape: today it carries only the runner because the
+image already has its dependencies; in production it is a per-commit
+virtualenv holding the real harness, built in CI, the image supplying only
+the interpreter.
 
 ## Try it
 
