@@ -491,7 +491,8 @@ def test_chaos_returns_409_when_the_provider_says_the_target_is_gone(
 
 def test_pool_edit_merges_and_validates(demo_client, backend):
     registry, _ = backend
-    assert demo_client.put("/api/pool/demo", json={"max": 3}, headers=DEMO_HEADERS).status_code == 404
+    r = demo_client.put("/api/pool/demo", json={"max": 3}, headers=DEMO_HEADERS)
+    assert r.status_code == 404
     registry.ensure_policy("demo", min_idle=2, max=5, image="img")
     r = demo_client.put("/api/pool/demo", json={"max": 3}, headers=DEMO_HEADERS)
     assert r.status_code == 200 and r.json()["max"] == 3 and r.json()["min_idle"] == 2
