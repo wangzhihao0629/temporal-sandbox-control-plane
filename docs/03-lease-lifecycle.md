@@ -40,8 +40,8 @@ Four DynamoDB tables, created by `create_tables` in `schema.py`:
 `claim_idle` queries `pool_state_index` for `(pool, idle)`, sorts the
 candidates oldest-first by `created_at`, then for each issues `update_item`
 with `ConditionExpression="#s = :idle AND attribute_not_exists(lease_id)"`,
-so the longest-idle VM is leased first; two managers racing the same row
-cannot both succeed. `release` conditions on `"lease_id = :lease"`: if the
+so the oldest VM is leased first; two managers racing one row cannot
+both succeed. `release` conditions on `"lease_id = :lease"`: if the
 row no longer carries that id, it returns `False` having done nothing,
 because the lease already ended. `write_off` conditions on `"attribute_exists(vm_id)
 AND #s <> :terminated"`, so writing off a VM twice is a no-op returning
@@ -102,10 +102,10 @@ step of its own.
 
 **Health** terminates provider instances with no registry row past the boot
 deadline, or reported in `DEAD_STATES = frozenset({"stopped", "stopping",
-"exited", "dead"})` — a strict list on purpose: an unrecognised state reads
-as alive, so a vocabulary change cannot read as a fleet-wide death sentence,
-and a truly gone VM is still reaped by the boot deadline or a stale
-heartbeat. If the provider reports no instances while live rows exist,
+"exited", "dead"})` — a strict list on purpose: an unrecognised state is
+treated as alive, so a vocabulary change cannot be read as a fleet-wide
+death sentence, and a truly gone VM is still reaped by the boot deadline or
+a stale heartbeat. If the provider reports no instances while live rows exist,
 `health` sets `inventory_suspect` and skips missing-instance write-offs for
 that pass — every other check still runs — because a vanished fleet is far
 less likely than one bad provider call, and believing it would write off
@@ -150,7 +150,7 @@ from ordinary VM queries (a Python filter on `vm_id`); `list_pools` is the
 mirror image, selecting only pool rows with a DynamoDB `begins_with` filter.
 `make policy` runs `policy_cli`: with no flags it prints the current policy,
 or merges `--min-idle`, `--max`, and `--image` into it and writes it back;
-the reconciler picks up the change on its next pass.
+the reconciler picks it up on its next pass.
 
 ## Read the code
 
