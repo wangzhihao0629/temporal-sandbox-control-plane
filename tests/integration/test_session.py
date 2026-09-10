@@ -271,3 +271,44 @@ async def test_losing_the_vm_mid_turn_resumes_from_the_bundle(
         for vm in vms.values():
             if vm.vm_id != victim:
                 await vm.stop()
+
+
+async def _wait_state(registry, vm_id, state, seconds=10):
+    for _ in range(int(seconds / 0.1)):
+        if registry.get_vm(vm_id)["state"] == state:
+            return
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"{vm_id} never reached {state}: {registry.get_vm(vm_id)['state']}")
+
+
+def _find_application_error(exc: BaseException):
+    """Walk an exception's cause chain to the first ApplicationError.
+
+    `run_step` raises `ApplicationError` directly from workflow code, so it
+    can land at any depth depending on what wraps it on the way out; don't
+    assume a fixed depth.
+    """
+    from temporalio.exceptions import ApplicationError
+
+    cause = exc
+    while cause is not None:
+        if isinstance(cause, ApplicationError):
+            return cause
+        cause = getattr(cause, "cause", None)
+    raise AssertionError(f"no ApplicationError in the cause chain of {exc!r}")
+
+
+async def test_a_broken_step_fails_the_session_with_the_runners_error(
+    env, aws_server, session_workers, vm, runner_artifact, seed_root, tmp_path
+):
+    from temporalio.client import WorkflowFailureError
+
+    registry, _ = aws_server
+    sid = f"broken-{uuid.uuid4().hex[:6]}"
+    params = session_params(sid, runner_artifact, seed_root, tmp_path / "ws", repo="missing")
+    with pytest.raises(WorkflowFailureError) as exc_info:
+        await _run(env, params)
+    app_err = _find_application_error(exc_info.value)
+    assert app_err.type == "StepBroken"
+    assert "no seed repository" in app_err.message
+    await _wait_state(registry, vm.vm_id, "idle")

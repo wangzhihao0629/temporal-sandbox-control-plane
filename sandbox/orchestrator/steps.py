@@ -7,9 +7,10 @@ Why: every step is its own exec activity with its own timeout, so the
 Temporal UI shows the session's shape and a failure names the step. The runner
 writes its answer to an envelope in the object store and the orchestrator reads
 it through an activity, so no payload ever carries a test report. A `lost` job
-is the lease being lost; a non-zero exit is the runner breaking; an envelope
-with `ok: false` is a step that broke while still able to say why. Nothing
-here touches the network, because the workflow imports it.
+is the lease being lost; a non-zero exit with a readable `ok: false` envelope
+is `StepBroken`, carrying the runner's own curated error; a non-zero exit
+without one is `ExecFailed` with the stderr tail. Nothing here touches the
+network, because the workflow imports it.
 Production: identical; the argv follows the real harness.
 """
 
@@ -18,7 +19,7 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError
 
 from sandbox.client.sandbox import Lease
 from sandbox.contract.errors import ExecFailed, LeaseLost
@@ -158,30 +159,62 @@ def export_spec(ctx: StepContext, uris: SessionUris, turn: int) -> ExecSpec:
     return _spec(ctx, uris, "export", turn, ["--session-uri", uris.session], STEP_TIMEOUT_SECONDS)
 
 
+async def _read_envelope(
+    uris: SessionUris, spec: ExecSpec, kind: str, attempts: int
+) -> dict | None:
+    """Read a step's envelope, retrying up to `attempts` times.
+
+    With `attempts=1` (a non-zero exit, checking for a curated error before
+    falling back to `ExecFailed`) a still-unreadable envelope is expected, not
+    exceptional: return None instead of letting the activity error surface.
+    With more attempts (the normal, zero-exit path) a failure to ever read the
+    envelope is unexpected and propagates as before.
+    """
+    try:
+        return await workflow.execute_activity(
+            READ_ENVELOPE,
+            EnvelopeRequest(uri=uris.envelope(spec.job_id), kind=kind),
+            start_to_close_timeout=timedelta(minutes=1),
+            retry_policy=RetryPolicy(
+                maximum_attempts=attempts, initial_interval=timedelta(seconds=1)
+            ),
+            result_type=dict,
+        )
+    except ActivityError:
+        if attempts == 1:
+            return None
+        raise
+
+
 async def run_step(vm: Lease, uris: SessionUris, spec: ExecSpec) -> dict:
     """Run one runner step on the VM and return its envelope.
 
     Outcomes are kept apart on purpose: a lost job means the VM is gone and the
-    caller should lease another; a non-zero exit means the runner broke and the
-    session fails with the stderr tail; an envelope that says `ok: false` is a
-    step that broke and could still say why.
+    caller should lease another. A non-zero exit whose envelope is readable
+    and says `ok: false` is `StepBroken`, carrying the runner's own error; a
+    non-zero exit without a readable envelope is `ExecFailed` with the stderr
+    tail. A zero exit still needs its envelope to say `ok: true`, or it is
+    `StepBroken` too.
     """
     kind = spec.argv[2]
     result = await vm.exec(spec, check=False)
     if result.status == "lost":
         raise LeaseLost(f"{kind} job {spec.job_id} was lost with its VM")
-    if result.status != "exited" or result.exit_code != 0:
+    if result.status != "exited":
         raise ExecFailed(result)
-    envelope = await workflow.execute_activity(
-        READ_ENVELOPE,
-        EnvelopeRequest(uri=uris.envelope(spec.job_id), kind=kind),
-        start_to_close_timeout=timedelta(minutes=1),
-        retry_policy=RetryPolicy(maximum_attempts=5, initial_interval=timedelta(seconds=1)),
-        result_type=dict,
-    )
-    if not envelope.get("ok", False):
+    if result.exit_code != 0:
+        envelope = await _read_envelope(uris, spec, kind, attempts=1)
+        if envelope is not None and not envelope.get("ok", True):
+            raise ApplicationError(
+                f"{kind} step broke: {envelope.get('error', 'no error recorded')}",
+                type=STEP_BROKEN,
+                non_retryable=True,
+            )
+        raise ExecFailed(result)
+    envelope = await _read_envelope(uris, spec, kind, attempts=5)
+    if envelope is None or not envelope.get("ok", False):
         raise ApplicationError(
-            f"{kind} step broke: {envelope.get('error', 'no error recorded')}",
+            f"{kind} step broke: {(envelope or {}).get('error', 'no error recorded')}",
             type=STEP_BROKEN,
             non_retryable=True,
         )
