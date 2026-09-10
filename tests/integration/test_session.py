@@ -125,6 +125,7 @@ async def test_the_fix_loop_stops_on_green_tests(
     summary = store.get_json(result.summary_uri)
     assert summary["turns"] == 2 and summary["tests_passed"] and summary["finished_at"]
     assert summary["scenario"] == "multiply-with-bug" and summary["vm_ids"] == [vm.vm_id]
+    assert summary["workflow_id"] == f"session-{sid}"
 
     turn2 = store.get_json(uris.envelope(f"{sid}-turn-t2-a1"))
     assert turn2["feedback_used"], "the second turn saw the first turn's failures"

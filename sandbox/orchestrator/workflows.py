@@ -240,6 +240,7 @@ class CodingSessionDemoWorkflow:
                         fake_cost_usd=round(cost, 4),
                         vm_ids=list(vm_ids),
                         attempts=attempt,
+                        workflow_id=workflow.info().workflow_id,
                     )
                     summary_uri = await workflow.execute_activity(
                         PUBLISH_SUMMARY,

@@ -76,6 +76,7 @@ class SessionSummary:
     fake_cost_usd: float
     vm_ids: list[str]
     attempts: int
+    workflow_id: str = ""
 
 
 @dataclass(frozen=True)
