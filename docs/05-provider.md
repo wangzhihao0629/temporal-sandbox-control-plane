@@ -50,10 +50,11 @@ process and every launched VM reads its endpoints from. Its own comment
 explains why moto runs on the host rather than in a container: "on a
 managed laptop, host processes are confined to loopback, so the `container`
 bridge network is unreachable from here even though a VM can reach a host
-listener over that same bridge." `up.sh` discovers the bridge gateway (it
-defaults to `192.168.64.1`, overridable by `SANDBOX_VM_GATEWAY`), then
-proves the path works by running an alpine container that fetches from
-`moto` through that gateway before writing `.env` at all.
+listener over that same bridge." `up.sh` sets the bridge gateway to a
+hard-coded default (`192.168.64.1`), overridable with `SANDBOX_VM_GATEWAY`
+if that address ever stops matching this machine, then proves the path
+works by running a throwaway alpine container that fetches from moto
+through that gateway before it writes `.env`.
 
 That file carries two forms of each endpoint: `TEMPORAL_ADDRESS` and
 `DYNAMODB_ENDPOINT`/`S3_ENDPOINT` on loopback for host processes, and
