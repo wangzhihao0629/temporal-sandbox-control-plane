@@ -19,10 +19,9 @@ Spec §5.1 states five principles the code holds to:
 - **Determinism.** Every id a caller needs — a `request_id`, a `job_id` — is
   created in workflow code with `workflow.uuid4()` before the call, so a
   retried activity retries against the same key. `sandbox/contract/types.py`
-  calls the module "JSON-native frozen dataclasses": plain `str`, `int`,
-  `float`, `bool`, `list`, and `dict` fields round-trip through Temporal's
-  default data converter with no custom codec, and `frozen=True` means
-  nothing mutates a value once sent.
+  keeps the module JSON-native — plain `str`, `int`, `float`, `bool`, `list`,
+  and `dict` fields round-trip through Temporal's default data converter
+  with no custom codec — and frozen, so nothing mutates a value once sent.
 - **Two failure classes.** Infrastructure failures raise and are retryable;
   job outcomes — a non-zero exit, a timed-out job — are data, returned in an
   `ExecResult`.
@@ -112,10 +111,10 @@ stopped reporting progress.
 
 **Release retries without limit.** `Sandbox.release` runs from `lease()`'s
 `finally`, with a `RetryPolicy` that sets no `maximum_attempts`. The module
-docstring explains why: "raising would replace the workflow's real outcome
-with a cleanup error." The manager is idempotent on `lease_id` — see chapter
-03 — so a manager outage delays the release instead of failing the workflow
-that already finished its real work.
+docstring gives the reason: the manager is idempotent on the lease id, so a
+manager outage "should delay the release, not replace the workflow's real
+outcome with an error raised while cleaning up." See chapter 03 for the
+manager side of that idempotency.
 
 ## Errors from the caller's seat
 
