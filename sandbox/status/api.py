@@ -15,10 +15,12 @@ IAM role of the platform.
 
 import asyncio
 import json
+import logging
 import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query
@@ -33,6 +35,8 @@ from sandbox.objectstore import ObjectStore
 from sandbox.registry.client import Registry
 from sandbox.status import joins
 from sandbox.timeutil import now
+
+logger = logging.getLogger(__name__)
 
 STATIC = Path(__file__).resolve().parent / "static"
 SESSION_PREFIX = "s3://sandbox-out/"
@@ -61,13 +65,16 @@ class TemporalOwnerStatus:
         self.address = address
         self.namespace = namespace
         self._client: Client | None = None
+        self._connect_lock = asyncio.Lock()
 
     async def __call__(self, workflow_id: str, run_id: str) -> str | None:
         if self._client is None:
-            self._client = await Client.connect(self.address, namespace=self.namespace)
+            async with self._connect_lock:
+                if self._client is None:
+                    self._client = await Client.connect(self.address, namespace=self.namespace)
         try:
             handle = self._client.get_workflow_handle(workflow_id, run_id=run_id or None)
-            desc = await handle.describe()
+            desc = await handle.describe(rpc_timeout=timedelta(seconds=2))
         except RPCError as e:
             if e.status == RPCStatusCode.NOT_FOUND:
                 return None
@@ -91,12 +98,28 @@ async def _instances(deps: Deps) -> dict[str, dict]:
 
 
 async def _owner_statuses(deps: Deps, rows: list[dict]) -> dict[tuple[str, str], str | None]:
+    """Owner workflow status per `(workflow_id, run_id)`, `None` for a leased row on failure.
+
+    A Temporal outage should not 500 `/api/vms` or `/api/leases`; the page just shows `?`
+    for the owner status. Logged once per call, not once per row, so an outage does not
+    spam the log for every leased VM.
+    """
     statuses: dict[tuple[str, str], str | None] = {}
+    logged = False
     for row in rows:
         if row.get("state") == "leased" and row.get("owner_workflow_id"):
             key = (row["owner_workflow_id"], row.get("owner_run_id", ""))
             if key not in statuses:
-                statuses[key] = await deps.owner_status(*key)
+                try:
+                    statuses[key] = await deps.owner_status(*key)
+                except Exception:
+                    statuses[key] = None
+                    if not logged:
+                        logger.warning(
+                            "owner_status lookup failed; showing owner status as unknown",
+                            exc_info=True,
+                        )
+                        logged = True
     return statuses
 
 

@@ -247,12 +247,20 @@
     }
   });
 
+  let refreshing = false;
   async function refresh() {
+    if (refreshing) return;
+    refreshing = true;
     try {
-      const [vms, jobs, sessions, samples] = await Promise.all([
+      const [vms, jobs, sessions, samples] = await Promise.allSettled([
         json("/api/vms"), json("/api/jobs?limit=30"), json("/api/sessions?limit=15"), json("/api/samples?minutes=15")]);
-      renderVms(vms); renderJobs(jobs); renderSessions(sessions); renderSpark(samples);
-    } catch (err) { console.warn(err); }
+      if (vms.status === "fulfilled") renderVms(vms.value); else console.warn(vms.reason);
+      if (jobs.status === "fulfilled") renderJobs(jobs.value); else console.warn(jobs.reason);
+      if (sessions.status === "fulfilled") renderSessions(sessions.value); else console.warn(sessions.reason);
+      if (samples.status === "fulfilled") renderSpark(samples.value); else console.warn(samples.reason);
+    } finally {
+      refreshing = false;
+    }
   }
 
   function connect() {

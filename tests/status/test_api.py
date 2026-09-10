@@ -136,6 +136,33 @@ def test_vms_caches_the_provider_listing(backend, provider, owner_statuses):
     assert provider.list_calls == 1
 
 
+async def _failing_owner_status(workflow_id: str, run_id: str) -> str | None:
+    raise RuntimeError("temporal down")
+
+
+def test_vms_and_leases_degrade_when_the_owner_lookup_fails(backend, provider):
+    registry, store = backend
+    seed_vm(registry, "sbx-a", owner_workflow_id="session-x", owner_run_id="r1")
+    deps = Deps(
+        registry,
+        store,
+        provider,
+        _failing_owner_status,
+        "http://ui",
+        "default",
+        "demo",
+        False,
+        provider_cache_seconds=0.0,
+    )
+    with TestClient(create_app(deps)) as c:
+        vms_resp = c.get("/api/vms")
+        leases_resp = c.get("/api/leases")
+    assert vms_resp.status_code == 200 and leases_resp.status_code == 200
+    a = next(v for v in vms_resp.json() if v["vm_id"] == "sbx-a")
+    assert a["state"] == "leased" and a["owner_status"] is None
+    assert leases_resp.json()[0]["owner_status"] is None
+
+
 def test_leases_lists_only_leased_rows(client, backend, owner_statuses):
     registry, _ = backend
     # sbx-b is seeded (and leased) before sbx-a exists, for the same reason as
