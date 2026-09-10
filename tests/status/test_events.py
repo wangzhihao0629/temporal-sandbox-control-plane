@@ -1,6 +1,7 @@
 """The SSE generator replays recent events, pushes new ones once, and adds fleet snapshots."""
 
 import json
+import time
 
 import pytest
 
@@ -34,11 +35,15 @@ def deps(backend, owner_statuses):
 
 async def test_stream_replays_then_pushes_new_events_once(deps):
     deps.registry.emit("boot", "vm-agent", "first", vm_id="sbx-a")
+    # ts_ulid keys are a millisecond timestamp plus a random suffix, so emits in the
+    # same millisecond have no defined order; space them out so order assertions hold.
+    time.sleep(0.002)
     deps.registry.emit("launch", "reconciler", "second", vm_id="sbx-b")
     frames = []
     async for frame in event_stream(deps, max_events=4):
         frames.append(_parse(frame))
         if len(frames) == 2:
+            time.sleep(0.002)
             deps.registry.emit("release", "manager", "third", vm_id="sbx-a")
     kinds = [k for k, _ in frames]
     controls = [d for k, d in frames if k == "control"]
@@ -57,7 +62,9 @@ async def test_fleet_frames_carry_counts(deps):
 
 async def test_reconnect_with_last_event_id_resumes_without_replaying(deps):
     deps.registry.emit("boot", "vm-agent", "first", vm_id="sbx-a")
+    time.sleep(0.002)
     second = deps.registry.emit("launch", "reconciler", "second", vm_id="sbx-b")
+    time.sleep(0.002)
     deps.registry.emit("release", "manager", "third", vm_id="sbx-a")
     frames = []
     async for frame in event_stream(deps, max_events=2, last_event_id=second["ts_ulid"]):
