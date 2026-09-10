@@ -14,17 +14,20 @@ IAM role of the platform.
 """
 
 import asyncio
+import json
 import os
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from temporalio.client import Client
 from temporalio.service import RPCError, RPCStatusCode
 
+from sandbox.manager import chaos
+from sandbox.manager.policy_cli import merge_policy
 from sandbox.objectstore import ObjectStore
 from sandbox.registry.client import Registry
 from sandbox.status import joins
@@ -156,17 +159,78 @@ async def leases(deps: Deps) -> list[dict]:
 
 
 async def sessions(deps: Deps, limit: int) -> list[dict]:
+    async def _summary(uri: str) -> dict | None:
+        try:
+            data = await asyncio.to_thread(deps.store.get_json, uri)
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            return None
+        return data if isinstance(data, dict) else None
+
     uris = await asyncio.to_thread(deps.store.list, SESSION_PREFIX)
-    summaries = await asyncio.gather(
-        *(asyncio.to_thread(deps.store.get_json, u) for u in uris if u.endswith("/summary.json"))
-    )
-    views = [joins.session_view(s) for s in summaries]
+    summaries = await asyncio.gather(*(_summary(u) for u in uris if u.endswith("/summary.json")))
+    views = [joins.session_view(s) for s in summaries if s is not None]
     for view in views:
         view["workflow_link"] = joins.temporal_link(
             deps.temporal_ui, deps.temporal_namespace, view["workflow_id"]
         )
     views.sort(key=lambda v: v["finished_at"], reverse=True)
     return views[:limit]
+
+
+def _control_frame(event: dict) -> str:
+    ts, _, _ = event["ts_ulid"].partition("#")
+    payload = {
+        "ts": ts,
+        "type": event.get("type", ""),
+        "actor": event.get("actor", ""),
+        "vm_id": event.get("vm_id", ""),
+        "message": event.get("message", ""),
+        "details": event.get("details", {}),
+    }
+    return f"event: control\ndata: {json.dumps(payload)}\n\n"
+
+
+async def event_stream(deps: Deps, max_events: int | None = None) -> AsyncIterator[str]:
+    """Replay the last 30 events oldest first, then poll and push new ones.
+
+    Every second poll also carries a `fleet` frame so the header counters move
+    without the page polling `/api/fleet` separately. `max_events` bounds the
+    stream for tests; the server streams until the client disconnects.
+    """
+    sent = 0
+    seen: set[str] = set()
+    fleet_frame = f"event: fleet\ndata: {json.dumps(await fleet(deps))}\n\n"
+    yield fleet_frame
+    sent += 1
+    if max_events is not None and sent >= max_events:
+        return
+    recent = await asyncio.to_thread(deps.registry.recent_events, 30)
+    for event in reversed(recent):
+        seen.add(event["ts_ulid"])
+        yield _control_frame(event)
+        sent += 1
+        if max_events is not None and sent >= max_events:
+            return
+    tick = 0
+    while True:
+        await asyncio.sleep(deps.poll_seconds)
+        tick += 1
+        recent = await asyncio.to_thread(deps.registry.recent_events, 50)
+        for event in reversed(recent):
+            if event["ts_ulid"] in seen:
+                continue
+            seen.add(event["ts_ulid"])
+            yield _control_frame(event)
+            sent += 1
+            if max_events is not None and sent >= max_events:
+                return
+        if tick % 2 == 0:
+            yield f"event: fleet\ndata: {json.dumps(await fleet(deps))}\n\n"
+            sent += 1
+            if max_events is not None and sent >= max_events:
+                return
+        if len(seen) > 5000:
+            seen = set(e["ts_ulid"] for e in recent)
 
 
 def create_app(deps: Deps) -> FastAPI:
@@ -231,6 +295,41 @@ def create_app(deps: Deps) -> FastAPI:
     async def api_samples(minutes: int = Query(15, ge=1, le=1440)):
         events = await asyncio.to_thread(deps.registry.recent_events, 200)
         return joins.sample_series(events, minutes, now())
+
+    @app.get("/api/events")
+    async def api_events():
+        return StreamingResponse(
+            event_stream(deps),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    def _demo_only():
+        if not deps.demo_mode:
+            raise HTTPException(403, "demo endpoints are disabled; start with STATUS_DEMO_MODE=1")
+
+    @app.post("/api/chaos/{vm_id}/{action}")
+    async def api_chaos(vm_id: str, action: str):
+        _demo_only()
+        if action not in chaos.ACTIONS:
+            raise HTTPException(422, f"action must be one of {chaos.ACTIONS}")
+        row = await asyncio.to_thread(deps.registry.get_vm, vm_id)
+        if row is None:
+            raise HTTPException(404, f"no VM {vm_id}")
+        event = await asyncio.to_thread(chaos.apply, deps.provider, deps.registry, action, vm_id)
+        return {"type": event["type"], "message": event["message"], "vm_id": vm_id}
+
+    @app.put("/api/pool/{pool}")
+    async def api_pool(pool: str, body: dict = Body(...)):  # noqa: B008 -- fastapi.Body
+        _demo_only()
+        current = await asyncio.to_thread(deps.registry.get_policy, pool)
+        if current is None:
+            raise HTTPException(404, f"pool {pool!r} has no policy")
+        try:
+            merged = merge_policy(current, body.get("min_idle"), body.get("max"), None)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        return await asyncio.to_thread(deps.registry.put_policy, pool, **merged)
 
     return app
 

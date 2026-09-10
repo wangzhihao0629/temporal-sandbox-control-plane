@@ -202,3 +202,68 @@ def test_samples_window(client, backend):
     registry.emit("launch", "reconciler", "not a sample")
     points = client.get("/api/samples", params={"minutes": 15}).json()
     assert len(points) == 1 and points[0]["idle"] == 2 and "ts" in points[0]
+
+
+def test_sessions_skips_a_summary_that_is_not_a_json_object(client, backend):
+    _, store = backend
+    store.put_json(
+        "s3://sandbox-out/good/summary.json",
+        {
+            "session_id": "good",
+            "turns": 1,
+            "tests_passed": True,
+            "finished_at": "2026-09-10T02:00:00.000Z",
+            "workflow_id": "session-good",
+        },
+    )
+    store.put_bytes("s3://sandbox-out/bad/summary.json", b"[1, 2]")
+    store.put_bytes("s3://sandbox-out/worse/summary.json", b"{not json")
+    sessions = client.get("/api/sessions").json()
+    assert [s["session_id"] for s in sessions] == ["good"]
+
+
+def test_demo_endpoints_are_refused_unless_enabled(client):
+    assert client.post("/api/chaos/sbx-a/kill").status_code == 403
+    assert client.put("/api/pool/demo", json={"max": 3}).status_code == 403
+
+
+@pytest.fixture
+def demo_client(backend, provider, owner_statuses):
+    registry, store = backend
+    deps = Deps(
+        registry,
+        store,
+        provider,
+        owner_statuses,
+        "http://ui",
+        "default",
+        "demo",
+        True,
+        provider_cache_seconds=0.0,
+    )
+    with TestClient(create_app(deps)) as c:
+        yield c
+
+
+def test_chaos_calls_the_provider_and_records_an_event(demo_client, backend, provider):
+    registry, _ = backend
+    seed_vm(registry, "sbx-a")
+    r = demo_client.post("/api/chaos/sbx-a/kill")
+    assert r.status_code == 200 and r.json()["type"] == "chaos"
+    assert provider.killed == ["sbx-a"]
+    r = demo_client.post("/api/chaos/sbx-a/delete")
+    assert r.status_code == 200 and provider.terminated == ["sbx-a"]
+    assert demo_client.post("/api/chaos/sbx-a/explode").status_code == 422
+    assert demo_client.post("/api/chaos/sbx-zzz/kill").status_code == 404
+    events = registry.recent_events(10)
+    assert [e["type"] for e in events[:2]] == ["chaos", "chaos"] and events[0]["actor"] == "chaos"
+
+
+def test_pool_edit_merges_and_validates(demo_client, backend):
+    registry, _ = backend
+    assert demo_client.put("/api/pool/demo", json={"max": 3}).status_code == 404
+    registry.ensure_policy("demo", min_idle=2, max=5, image="img")
+    r = demo_client.put("/api/pool/demo", json={"max": 3})
+    assert r.status_code == 200 and r.json()["max"] == 3 and r.json()["min_idle"] == 2
+    assert demo_client.put("/api/pool/demo", json={"min_idle": 9}).status_code == 400
+    assert registry.get_policy("demo")["max"] == 3

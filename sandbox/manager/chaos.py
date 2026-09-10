@@ -2,6 +2,7 @@
 
 What: kill is a crash, stop is a drain (SIGTERM), delete removes the
 container without warning. Each is recorded as an event with actor `chaos`.
+`apply()` is shared with the dashboard's chaos endpoint.
 Why: the reconciler's stale-heartbeat and missing-instance paths, and the VM
 agent's drain handling, only prove themselves against a real failure — kill
 exercises the first, delete the second, stop the third.
@@ -15,20 +16,30 @@ import os
 import sys
 
 from sandbox import envfile
-from sandbox.manager.providers.apple_container import AppleContainerProvider
 from sandbox.registry.client import Registry
+
+ACTIONS = ("kill", "stop", "delete")
+
+
+def apply(provider, registry: Registry, action: str, vm_id: str) -> dict:
+    """Break `vm_id` the way `action` says and record who did it."""
+    if action not in ACTIONS:
+        raise ValueError(f"unknown chaos action {action!r}; expected one of {ACTIONS}")
+    {"kill": provider.kill, "stop": provider.stop, "delete": provider.terminate}[action](vm_id)
+    return registry.emit(
+        "chaos", "chaos", f"{action} {vm_id}", vm_id=vm_id, details={"action": action}
+    )
 
 
 def main() -> None:
+    from sandbox.manager.providers.apple_container import AppleContainerProvider
+
     envfile.load()
-    if len(sys.argv) != 3 or sys.argv[1] not in ("kill", "stop", "delete"):
+    if len(sys.argv) != 3 or sys.argv[1] not in ACTIONS:
         sys.exit("usage: chaos {kill|stop|delete} <vm_id>")
     action, vm_id = sys.argv[1], sys.argv[2]
     provider = AppleContainerProvider(image=os.environ.get("SANDBOX_VM_IMAGE", "sandbox-vm:dev"))
-    {"kill": provider.kill, "stop": provider.stop, "delete": provider.terminate}[action](vm_id)
-    Registry.from_env().emit(
-        "chaos", "chaos", f"{action} {vm_id}", vm_id=vm_id, details={"action": action}
-    )
+    apply(provider, Registry.from_env(), action, vm_id)
     print(f"{action} {vm_id}")
 
 
