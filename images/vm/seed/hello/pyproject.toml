@@ -1,0 +1,17 @@
+[project]
+name = "hello"
+version = "0.1.0"
+description = "Seed repository for the sandbox demo: a calculator small enough to read in a minute"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-p no:cacheprovider"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F"]
