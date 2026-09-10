@@ -56,6 +56,7 @@ class Deps:
     poll_seconds: float = 1.0
     provider_cache_seconds: float = 2.0
     _cache: dict = field(default_factory=dict, repr=False)
+    _provider_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
 
 class TemporalOwnerStatus:
@@ -82,19 +83,38 @@ class TemporalOwnerStatus:
         return desc.status.name if desc.status is not None else None
 
 
+def _cache_fresh(cache: dict, provider_cache_seconds: float) -> bool:
+    return cache.get("at", 0.0) + provider_cache_seconds > time.monotonic() and "by_ref" in cache
+
+
 async def _instances(deps: Deps) -> dict[str, dict]:
-    """Provider instances by provider_ref, cached for `provider_cache_seconds`."""
+    """Provider instances by provider_ref, cached for `provider_cache_seconds`.
+
+    A cache miss is single-flight: concurrent callers share one `provider.list()` call
+    instead of each kicking off a redundant thread. On failure, log a warning and fall
+    back to the previous listing (rows read `provider_state: "missing"` for anything not
+    in it, `{}` if there has never been a successful listing) rather than raising and
+    500ing `/api/vms` and `/api/leases`.
+    """
     cache = deps._cache
-    if cache.get("at", 0.0) + deps.provider_cache_seconds > time.monotonic() and "by_ref" in cache:
+    if _cache_fresh(cache, deps.provider_cache_seconds):
         return cache["by_ref"]
-    instances = await asyncio.to_thread(deps.provider.list)
-    by_ref = {}
-    for inst in instances:
-        item = inst if isinstance(inst, dict) else vars(inst)
-        by_ref[item["provider_ref"]] = item
-    cache["by_ref"] = by_ref
-    cache["at"] = time.monotonic()
-    return by_ref
+    async with deps._provider_lock:
+        if _cache_fresh(cache, deps.provider_cache_seconds):
+            return cache["by_ref"]
+        try:
+            instances = await asyncio.to_thread(deps.provider.list)
+        except Exception:
+            logger.warning("provider.list() failed; showing the previous listing", exc_info=True)
+            cache["at"] = time.monotonic()
+            return cache.get("by_ref", {})
+        by_ref = {}
+        for inst in instances:
+            item = inst if isinstance(inst, dict) else vars(inst)
+            by_ref[item["provider_ref"]] = item
+        cache["by_ref"] = by_ref
+        cache["at"] = time.monotonic()
+        return by_ref
 
 
 async def _owner_statuses(deps: Deps, rows: list[dict]) -> dict[tuple[str, str], str | None]:

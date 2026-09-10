@@ -1,11 +1,19 @@
 """The read endpoints join registry, provider, Temporal, and object-store data into JSON."""
 
+import asyncio
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from sandbox.manager.providers.apple_container import ProviderError
 from sandbox.status.api import Deps, create_app
-from tests.status.conftest import ListingProvider, seed_vm
+from tests.status.conftest import (
+    FlakyListingProvider,
+    ListingProvider,
+    SlowListingProvider,
+    seed_vm,
+)
 
 
 @pytest.fixture
@@ -161,6 +169,80 @@ def test_vms_and_leases_degrade_when_the_owner_lookup_fails(backend, provider):
     a = next(v for v in vms_resp.json() if v["vm_id"] == "sbx-a")
     assert a["state"] == "leased" and a["owner_status"] is None
     assert leases_resp.json()[0]["owner_status"] is None
+
+
+def test_instances_falls_back_to_the_stale_listing_on_a_later_failure(backend, owner_statuses):
+    registry, store = backend
+    seed_vm(registry, "sbx-a")
+    flaky_provider = FlakyListingProvider(
+        [{"provider_ref": "sbx-a", "vm_id": "sbx-a", "state": "running", "created_at": "t"}],
+        fail_on=frozenset({2}),
+    )
+    deps = Deps(
+        registry,
+        store,
+        flaky_provider,
+        owner_statuses,
+        "http://ui",
+        "default",
+        "demo",
+        False,
+        provider_cache_seconds=0.0,
+    )
+    with TestClient(create_app(deps)) as c:
+        first = c.get("/api/vms")
+        second = c.get("/api/vms")
+    assert first.status_code == 200 and second.status_code == 200
+    assert next(v for v in first.json() if v["vm_id"] == "sbx-a")["provider_state"] == "running"
+    assert next(v for v in second.json() if v["vm_id"] == "sbx-a")["provider_state"] == "running"
+    assert flaky_provider.list_calls == 2
+
+
+def test_instances_returns_missing_when_the_first_listing_fails(backend, owner_statuses):
+    registry, store = backend
+    seed_vm(registry, "sbx-a")
+    flaky_provider = FlakyListingProvider([], fail_on=frozenset({1}))
+    deps = Deps(
+        registry,
+        store,
+        flaky_provider,
+        owner_statuses,
+        "http://ui",
+        "default",
+        "demo",
+        False,
+        provider_cache_seconds=0.0,
+    )
+    with TestClient(create_app(deps)) as c:
+        r = c.get("/api/vms")
+    assert r.status_code == 200
+    assert next(v for v in r.json() if v["vm_id"] == "sbx-a")["provider_state"] == "missing"
+
+
+async def test_instances_is_single_flight_on_a_cache_miss(backend, owner_statuses):
+    registry, store = backend
+    seed_vm(registry, "sbx-a")
+    slow_provider = SlowListingProvider(
+        [{"provider_ref": "sbx-a", "vm_id": "sbx-a", "state": "running", "created_at": "t"}],
+        delay=0.2,
+    )
+    deps = Deps(
+        registry,
+        store,
+        slow_provider,
+        owner_statuses,
+        "http://ui",
+        "default",
+        "demo",
+        False,
+        provider_cache_seconds=60.0,
+    )
+    app = create_app(deps)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+        r1, r2 = await asyncio.gather(ac.get("/api/vms"), ac.get("/api/vms"))
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert slow_provider.list_calls == 1
 
 
 def test_leases_lists_only_leased_rows(client, backend, owner_statuses):

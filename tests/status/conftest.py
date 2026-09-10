@@ -1,5 +1,7 @@
 """Status API fixtures: a moto-backed registry and store, a stub provider, a fake owner lookup."""
 
+import time
+
 import boto3
 import pytest
 from moto import mock_aws
@@ -20,6 +22,37 @@ class ListingProvider(StubProvider):
 
     def list(self):
         self.list_calls += 1
+        return list(self.instances)
+
+
+class FlakyListingProvider(StubProvider):
+    """A stub whose `list()` raises on chosen call numbers (1-indexed) and otherwise succeeds."""
+
+    def __init__(self, instances=None, fail_on: frozenset[int] = frozenset()):
+        super().__init__()
+        self.instances = list(instances or [])
+        self.fail_on = fail_on
+        self.list_calls = 0
+
+    def list(self):
+        self.list_calls += 1
+        if self.list_calls in self.fail_on:
+            raise RuntimeError("container ls failed")
+        return list(self.instances)
+
+
+class SlowListingProvider(StubProvider):
+    """A stub whose `list()` sleeps before returning, to exercise single-flight callers."""
+
+    def __init__(self, instances=None, delay: float = 0.2):
+        super().__init__()
+        self.instances = list(instances or [])
+        self.delay = delay
+        self.list_calls = 0
+
+    def list(self):
+        self.list_calls += 1
+        time.sleep(self.delay)
         return list(self.instances)
 
 
