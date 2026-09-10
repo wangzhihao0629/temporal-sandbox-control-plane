@@ -28,6 +28,7 @@ from temporalio.service import RPCError, RPCStatusCode
 
 from sandbox.manager import chaos
 from sandbox.manager.policy_cli import merge_policy
+from sandbox.manager.providers.apple_container import ProviderError
 from sandbox.objectstore import ObjectStore
 from sandbox.registry.client import Registry
 from sandbox.status import joins
@@ -162,7 +163,7 @@ async def sessions(deps: Deps, limit: int) -> list[dict]:
     async def _summary(uri: str) -> dict | None:
         try:
             data = await asyncio.to_thread(deps.store.get_json, uri)
-        except (json.JSONDecodeError, TypeError, AttributeError):
+        except (json.JSONDecodeError, TypeError, AttributeError, FileNotFoundError):
             return None
         return data if isinstance(data, dict) else None
 
@@ -316,7 +317,12 @@ def create_app(deps: Deps) -> FastAPI:
         row = await asyncio.to_thread(deps.registry.get_vm, vm_id)
         if row is None:
             raise HTTPException(404, f"no VM {vm_id}")
-        event = await asyncio.to_thread(chaos.apply, deps.provider, deps.registry, action, vm_id)
+        try:
+            event = await asyncio.to_thread(
+                chaos.apply, deps.provider, deps.registry, action, vm_id
+            )
+        except ProviderError as e:
+            raise HTTPException(409, str(e)) from None
         return {"type": event["type"], "message": event["message"], "vm_id": vm_id}
 
     @app.put("/api/pool/{pool}")

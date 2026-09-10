@@ -3,6 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from sandbox.manager.providers.apple_container import ProviderError
 from sandbox.status.api import Deps, create_app
 from tests.status.conftest import ListingProvider, seed_vm
 
@@ -222,6 +223,43 @@ def test_sessions_skips_a_summary_that_is_not_a_json_object(client, backend):
     assert [s["session_id"] for s in sessions] == ["good"]
 
 
+def test_sessions_skips_a_summary_deleted_between_list_and_read(client, backend, monkeypatch):
+    _, store = backend
+    for i, sid in enumerate(["s0", "s1"]):
+        store.put_json(
+            f"s3://sandbox-out/{sid}/summary.json",
+            {
+                "session_id": sid,
+                "turns": i,
+                "tests_passed": True,
+                "finished_at": f"2026-09-10T0{i}:00:00.000Z",
+                "workflow_id": f"session-{sid}",
+            },
+        )
+    store.put_json(
+        "s3://sandbox-out/gone/summary.json",
+        {
+            "session_id": "gone",
+            "turns": 0,
+            "tests_passed": True,
+            "finished_at": "2026-09-10T05:00:00.000Z",
+            "workflow_id": "session-gone",
+        },
+    )
+    deps = client.app.state.deps
+    real_get_json = deps.store.get_json
+
+    def flaky_get_json(uri):
+        if uri == "s3://sandbox-out/gone/summary.json":
+            raise FileNotFoundError(uri)
+        return real_get_json(uri)
+
+    monkeypatch.setattr(deps.store, "get_json", flaky_get_json)
+    r = client.get("/api/sessions")
+    assert r.status_code == 200
+    assert {s["session_id"] for s in r.json()} == {"s0", "s1"}
+
+
 def test_demo_endpoints_are_refused_unless_enabled(client):
     assert client.post("/api/chaos/sbx-a/kill").status_code == 403
     assert client.put("/api/pool/demo", json={"max": 3}).status_code == 403
@@ -257,6 +295,21 @@ def test_chaos_calls_the_provider_and_records_an_event(demo_client, backend, pro
     assert demo_client.post("/api/chaos/sbx-zzz/kill").status_code == 404
     events = registry.recent_events(10)
     assert [e["type"] for e in events[:2]] == ["chaos", "chaos"] and events[0]["actor"] == "chaos"
+
+
+def test_chaos_returns_409_when_the_provider_says_the_target_is_gone(
+    demo_client, backend, provider, monkeypatch
+):
+    registry, _ = backend
+    seed_vm(registry, "sbx-a")
+
+    def exploding_kill(vm_id):
+        raise ProviderError("no such container")
+
+    monkeypatch.setattr(provider, "kill", exploding_kill)
+    r = demo_client.post("/api/chaos/sbx-a/kill")
+    assert r.status_code == 409 and "no such container" in r.json()["detail"]
+    assert all(e["type"] != "chaos" for e in registry.recent_events(5))
 
 
 def test_pool_edit_merges_and_validates(demo_client, backend):
