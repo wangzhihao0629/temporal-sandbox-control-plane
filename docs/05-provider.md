@@ -147,4 +147,4 @@ id>`. Watch `make show`: a `write_off_stopped` event appears once the next
 reconciler pass's health step sees the container's dead state, followed by
 a `launch` event as capacity replaces it.
 
-Next: [06 · A coding session: the orchestrator and the fake agent] — not yet written (06-orchestrator-and-fake-agent.md)
+Next: [06 · A coding session: the orchestrator and the fake agent](06-orchestrator-and-fake-agent.md)

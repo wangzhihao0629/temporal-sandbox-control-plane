@@ -166,4 +166,4 @@ production target already.
 
 Nothing to run yet; chapter 08 runs all of it.
 
-Next: [02 · The contract: what a workflow may ask a VM] (02-the-contract.md)
+Next: [02 · The contract: what a workflow may ask a VM](02-the-contract.md)

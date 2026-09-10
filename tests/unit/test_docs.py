@@ -37,7 +37,6 @@ def _make_targets() -> set[str]:
     return set(re.findall(r"^([a-z][a-z-]*):", text, re.M))
 
 
-@pytest.mark.xfail(strict=True, reason="chapters land in Tasks 2 to 5")
 def test_every_chapter_exists():
     missing = [name for name in CHAPTERS if not (DOCS / name).exists()]
     assert not missing, missing

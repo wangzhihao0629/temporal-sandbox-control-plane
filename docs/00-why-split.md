@@ -77,11 +77,12 @@ at the start of the turn — but it means owning an agent harness inside the
 workflow, one that has to track every tool Claude Code or Codex might ever
 add.
 
-Spec §17 records the decision and the reasoning in one line: the agent loop
-stays on the VM because it **avoids owning an agent harness**, and because
-doing it the other way is a strict superset of this design at the VM layer —
-if per-tool-call durability is ever wanted, it becomes a second caller of the
-same primitives this contract already exposes, not a reason to redesign them.
+Spec §17's decision table records the choice in one line: the agent loop
+stays on the VM because it **avoids owning an agent harness**. Spec §2 gives
+the fuller reasoning: doing it the other way is a strict superset of this
+design at the VM layer — if per-tool-call durability is ever wanted, it
+becomes a second caller of the same primitives this contract already
+exposes, not a reason to redesign them.
 
 ## What the demo proves
 

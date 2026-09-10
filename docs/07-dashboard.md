@@ -139,4 +139,4 @@ the floor input in the header and click apply; the next fleet frame reflects
 the new policy, and a fresh idle VM appears if the floor rose above the
 current count.
 
-Next: [08 · Running the demo] — not yet written (08-running-the-demo.md)
+Next: [08 · Running the demo](08-running-the-demo.md)

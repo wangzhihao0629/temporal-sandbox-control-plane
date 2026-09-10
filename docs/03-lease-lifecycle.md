@@ -190,4 +190,4 @@ the leases step finds the owner terminated and releases the row to
 MAX=3` to lower a pool's ceiling and watch the next pass's `scale_in`
 action retire an idle VM once the cooldown passes.
 
-Next: [04 · Inside a VM: the agent that runs jobs] — not yet written (04-vm-agent.md)
+Next: [04 · Inside a VM: the agent that runs jobs](04-vm-agent.md)
