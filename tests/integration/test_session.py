@@ -2,6 +2,7 @@
 """CodingSessionDemoWorkflow end to end: the fix loop, the clean path, lint as data,
 max_turns exhaustion, and resuming from the bundle after the VM dies mid-turn."""
 
+import asyncio
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
@@ -82,3 +83,102 @@ async def test_the_fix_loop_stops_on_green_tests(
     assert test1["failed"] == 1 and test1["failures"][0]["test"].endswith("test_multiply")
     log = store.get_bytes(f"{uris.log(f'{sid}-turn-t2-a1')}/stdout.log").decode()
     assert "[feedback] 1 failing test" in log and "[tool] Edit calc/__init__.py" in log
+
+
+async def test_a_clean_scenario_takes_one_turn(
+    env, aws_server, session_workers, vm, runner_artifact, seed_root, tmp_path
+):
+    sid = f"clean-{uuid.uuid4().hex[:6]}"
+    result = await _run(
+        env,
+        session_params(sid, runner_artifact, seed_root, tmp_path / "ws", scenario="divide-clean"),
+    )
+    assert result.turns == 1 and result.tests_passed and result.lint_findings == 0
+    _, store = aws_server
+    assert "def divide" in store.get_bytes(SessionUris(sid).patch).decode()
+
+
+async def test_lint_findings_are_data_not_failures(
+    env, aws_server, session_workers, vm, runner_artifact, seed_root, tmp_path
+):
+    sid = f"lint-{uuid.uuid4().hex[:6]}"
+    result = await _run(
+        env, session_params(sid, runner_artifact, seed_root, tmp_path / "ws", scenario="lint-only")
+    )
+    assert result.turns == 1 and result.tests_passed and result.lint_findings == 1
+    _, store = aws_server
+    lint = store.get_json(SessionUris(sid).envelope(f"{sid}-lint-t1-a1"))
+    assert lint["findings"][0]["code"] == "F401"
+
+
+async def test_max_turns_exhaustion_is_a_result_not_an_error(
+    env, aws_server, session_workers, vm, runner_artifact, seed_root, tmp_path
+):
+    sid = f"never-{uuid.uuid4().hex[:6]}"
+    result = await _run(
+        env,
+        session_params(
+            sid, runner_artifact, seed_root, tmp_path / "ws", scenario="never-fixes", max_turns=2
+        ),
+    )
+    assert result.turns == 2 and not result.tests_passed and result.tests_failed == 1
+    _, store = aws_server
+    summary = store.get_json(result.summary_uri)
+    assert summary["tests_passed"] is False and summary["turns"] == 2
+    assert store.exists(SessionUris(sid).patch), "exported anyway"
+
+
+async def _wait_for_running_job(registry, vm_id, job_id, seconds=30):
+    for _ in range(int(seconds / 0.1)):
+        for row in registry.list_jobs(vm_id):
+            if row["job_id"] == job_id and row["status"] == "running":
+                return
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"{job_id} never ran on {vm_id}")
+
+
+async def test_losing_the_vm_mid_turn_resumes_from_the_bundle(
+    env, aws_server, session_workers, runner_artifact, seed_root, tmp_path
+):
+    registry, store = aws_server
+    root = tmp_path / "ws"
+    vms = {}
+    for name in ("sbx-a", "sbx-b"):
+        vms[name] = await InProcessVm(
+            env.client, registry, store, tmp_path, vm_id=name, workspace_root=root
+        ).start()
+    sid = f"lost-{uuid.uuid4().hex[:6]}"
+    params = session_params(
+        sid, runner_artifact, seed_root, root, scenario="multiply-with-bug", turn_seconds=4
+    )
+    victim = None
+    try:
+        handle = await env.client.start_workflow(
+            CodingSessionDemoWorkflow.run,
+            params,
+            id=f"session-{sid}",
+            task_queue=ORCHESTRATOR_TASK_QUEUE,
+        )
+        # Wait until turn 2 is running on whichever VM took the lease, then kill it.
+        for _ in range(600):
+            leased = [r for r in registry.list_vms("demo") if r["state"] == "leased"]
+            if leased:
+                break
+            await asyncio.sleep(0.1)
+        victim = leased[0]["vm_id"]
+        await _wait_for_running_job(registry, victim, f"{sid}-turn-t2-a1")
+        await asyncio.sleep(0.5)
+        await vms[victim].runtime.crash()
+
+        result = await asyncio.wait_for(handle.result(), timeout=120)
+        assert result.attempts == 2 and result.turns == 2 and result.tests_passed
+        assert result.vm_ids[0] == victim and result.vm_ids[1] != victim
+        uris = SessionUris(sid)
+        clone2 = store.get_json(uris.envelope(f"{sid}-clone-t0-a2"))
+        assert clone2["source"] == "bundle" and clone2["turn"] == 1
+        state = store.get_json(f"{uris.session}/session.json")
+        assert state["turn"] == 2 and [h["turn"] for h in state["history"]] == [1, 2]
+    finally:
+        for vm in vms.values():
+            if vm.vm_id != victim:
+                await vm.stop()

@@ -57,32 +57,31 @@ def aws_server(monkeypatch):
     port = _free_port()
     server = ThreadedMotoServer(ip_address="127.0.0.1", port=port, verbose=False)
     server.start()
-    endpoint = f"http://127.0.0.1:{port}"
-    for key, value in {
-        "S3_ENDPOINT": endpoint,
-        "DYNAMODB_ENDPOINT": endpoint,
-        "AWS_ACCESS_KEY_ID": "testing",
-        "AWS_SECRET_ACCESS_KEY": "testing",
-        "AWS_DEFAULT_REGION": "us-east-1",
-    }.items():
-        monkeypatch.setenv(key, value)
-    s3 = boto3.client("s3", endpoint_url=endpoint, region_name="us-east-1")
-    deadline = time.time() + 10
-    while True:
-        try:
-            s3.list_buckets()
-            break
-        except Exception:
-            if time.time() > deadline:
-                server.stop()
-                raise
-            time.sleep(0.1)
-    resource = boto3.resource("dynamodb", endpoint_url=endpoint, region_name="us-east-1")
-    create_tables(resource)
-    store = ObjectStore(endpoint_url=endpoint)
-    for bucket in BUCKETS:
-        store.ensure_bucket(bucket)
     try:
+        endpoint = f"http://127.0.0.1:{port}"
+        for key, value in {
+            "S3_ENDPOINT": endpoint,
+            "DYNAMODB_ENDPOINT": endpoint,
+            "AWS_ACCESS_KEY_ID": "testing",
+            "AWS_SECRET_ACCESS_KEY": "testing",
+            "AWS_DEFAULT_REGION": "us-east-1",
+        }.items():
+            monkeypatch.setenv(key, value)
+        s3 = boto3.client("s3", endpoint_url=endpoint, region_name="us-east-1")
+        deadline = time.time() + 10
+        while True:
+            try:
+                s3.list_buckets()
+                break
+            except Exception:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.1)
+        resource = boto3.resource("dynamodb", endpoint_url=endpoint, region_name="us-east-1")
+        create_tables(resource)
+        store = ObjectStore(endpoint_url=endpoint)
+        for bucket in BUCKETS:
+            store.ensure_bucket(bucket)
         yield Registry(resource), store
     finally:
         server.stop()
