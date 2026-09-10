@@ -65,6 +65,7 @@
   #drawer.open { display: flex; }
   #drawer pre { flex: 1; overflow: auto; margin: 8px 0 0; font-size: 12px; white-space: pre-wrap; }
   #policy { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+  #policy[hidden] { display: none; }
   #policy input { width: 56px; font: inherit; padding: 2px 6px; border-radius: 6px;
                   border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
 </style>
@@ -149,7 +150,10 @@
       `<div class="counter"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
     const pol = fleet.policy ? `floor ${fleet.policy.min_idle} · max ${fleet.policy.max}` : "no policy";
     const src = fleet.source === "sample" ? `sampled ${when(fleet.sample_at)}` : "counted from rows";
-    $("#meta").textContent = `pool ${config.pool} · provider ${config.provider} · ${pol} · ${src}`;
+    let temporalHost = "";
+    try { temporalHost = new URL(config.temporal_ui).host; } catch { /* no config yet */ }
+    const temporal = temporalHost ? ` · temporal ${temporalHost}` : "";
+    $("#meta").textContent = `pool ${config.pool} · provider ${config.provider} · ${pol} · ${src}${temporal}`;
     if (config.demo_mode && fleet.policy && document.activeElement.tagName !== "INPUT") {
       $("#min_idle").value = fleet.policy.min_idle; $("#max").value = fleet.policy.max;
     }
@@ -172,7 +176,7 @@
 
   function renderJobs(jobs) {
     $("#jobs tbody").innerHTML = jobs.map((j) => {
-      const exit = j.exit_code == null ? "" : `<span class="${j.exit_code === 0 ? "ok" : "bad"}">${j.exit_code}</span>`;
+      const exit = j.exit_code == null ? "" : `<span class="${j.exit_code === 0 ? "ok" : "bad"}">${esc(j.exit_code)}</span>`;
       const dur = j.duration_seconds == null ? "" : `${Number(j.duration_seconds).toFixed(1)}s`;
       const log = j.log_uri ? `<button data-log="${esc(j.job_id)}" data-vm="${esc(j.vm_id)}">log</button>` : "";
       return `<tr><td title="${esc(j.job_id)}">${esc(short(j.job_id))}</td><td>${esc(j.vm_id)}</td>
@@ -241,7 +245,11 @@
       if (!r.ok) alert(`${r.status}: ${await r.text()}`);
     }
     if (b.id === "apply") {
-      const body = { min_idle: Number($("#min_idle").value), max: Number($("#max").value) };
+      const minIdleV = $("#min_idle").value, maxV = $("#max").value;
+      const body = {};
+      if (minIdleV !== "" && Number.isInteger(Number(minIdleV))) body.min_idle = Number(minIdleV);
+      if (maxV !== "" && Number.isInteger(Number(maxV))) body.max = Number(maxV);
+      if (Object.keys(body).length === 0) return;
       const r = await fetch(`/api/pool/${encodeURIComponent(config.pool)}`, { method: "PUT",
         headers: { "content-type": "application/json", "X-Sandbox-Demo": "1" }, body: JSON.stringify(body) });
       if (!r.ok) alert(`${r.status}: ${await r.text()}`);
