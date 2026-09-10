@@ -41,6 +41,11 @@ show:
 image:
 	./scripts/build-image.sh
 
+.PHONY: artifact
+
+artifact:
+	$(UV) run python -m sandbox.runner.package
+
 .PHONY: demo chaos-kill chaos-stop chaos-delete policy reconcile hold terminate
 
 SECONDS ?= 120

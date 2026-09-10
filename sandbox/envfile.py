@@ -28,3 +28,26 @@ def load(path: str | os.PathLike = ".env", override: bool = False) -> dict[str, 
         if override or key not in os.environ:
             os.environ[key] = value
     return loaded
+
+
+def write(path: str | os.PathLike, updates: dict[str, str]) -> None:
+    """Set keys in a .env file in place, appending the ones it lacks.
+
+    Comments, blank lines, and every other key stay exactly where they were,
+    so a `make artifact` never disturbs what `make up` wrote.
+    """
+    file = Path(path)
+    lines = file.read_text().splitlines() if file.exists() else []
+    seen: set[str] = set()
+    for i, raw in enumerate(lines):
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key = line.partition("=")[0].strip()
+        if key in updates:
+            lines[i] = f"{key}={updates[key]}"
+            seen.add(key)
+    for key, value in updates.items():
+        if key not in seen:
+            lines.append(f"{key}={value}")
+    file.write_text("\n".join(lines) + "\n")
