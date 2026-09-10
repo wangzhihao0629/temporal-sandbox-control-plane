@@ -37,6 +37,12 @@ RUN python3 -m venv /opt/sandbox/venv \
  && /opt/sandbox/venv/bin/pip install --no-cache-dir -r /opt/sandbox/src/requirements.txt \
  && /opt/sandbox/venv/bin/pip install --no-cache-dir --no-deps /opt/sandbox/src
 
+# Seed repositories the demo clones from, so a session works offline. Built by
+# the same code the tests use, so the image and the tests agree on the seed.
+COPY images/vm/seed /opt/sandbox/seed
+RUN /opt/sandbox/venv/bin/python -m sandbox.runner.seed /opt/sandbox/seed /srv/repos \
+ && chmod -R a+rX /srv/repos
+
 # Dummy secrets so ExecSpec.secrets=["github_token"] resolves locally. In
 # production these are written by the host's token refresher.
 RUN printf 'dummy-github-token\n' > /etc/sandbox/secrets/github_token \

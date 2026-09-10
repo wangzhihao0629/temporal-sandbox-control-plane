@@ -12,8 +12,11 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-uv export --format requirements-txt --no-dev --no-group local --no-emit-project --locked \
-  -o images/vm/requirements.txt
+# `runner` holds what the runner shells out to inside a VM (pytest, ruff). It is
+# a separate group so the export names it explicitly instead of dragging in the
+# whole dev group.
+uv export --format requirements-txt --no-dev --no-group local --group runner \
+  --no-emit-project --locked -o images/vm/requirements.txt
 container builder start >/dev/null 2>&1 || true
 container build --tag sandbox-vm:dev --file images/vm/Dockerfile .
 container image list | grep sandbox-vm

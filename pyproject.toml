@@ -19,6 +19,10 @@ dev = [
 local = [
   "moto[server]>=5",
 ]
+runner = [
+  "pytest>=8",
+  "ruff>=0.6",
+]
 
 [tool.uv]
 default-groups = ["dev", "local"]
