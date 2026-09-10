@@ -24,18 +24,18 @@ implementation of leasing."
 `AppleContainerProvider`, in `sandbox/manager/providers/apple_container.py`,
 implements the protocol by shelling out to the `container` CLI and parsing
 its JSON, through one `run_cli` helper every method shares. `launch` runs
-`container run --detach --init --name <vm_id> --cpus N --memory M --env
-K=V... <image>` and returns `vm_id` as the `provider_ref` — the container
+`container run --detach --init --name <vm_id> --cpus N --memory M --env K=V... <image>`
+and returns `vm_id` as the `provider_ref` — the container
 name doubles as the id, so the manager knows it before the VM ever
 registers itself. The `--init` flag is what gives the container the init
 process chapter 04 named as the thing that reaps zombies and turns
 `SIGTERM` into a drain. `terminate` runs `container delete --force`, but
 swallows a `ProviderError` if `describe` afterward finds the instance
 already gone — a second terminate on an already-gone VM must not fail the
-caller. `kill` runs `container kill --signal KILL`; `stop` runs `container
-stop --time 20`. `list` runs `container ls --all --format json` and keeps
-only names starting with `NAME_PREFIX = "sbx-"`; `describe` runs `container
-inspect` and returns `None` on any `ProviderError` rather than raising.
+caller. `kill` runs `container kill --signal KILL`; `stop` runs
+`container stop --time 20`. `list` runs `container ls --all --format json` and keeps
+only names starting with `NAME_PREFIX = "sbx-"`; `describe` runs
+`container inspect` and returns `None` on any `ProviderError` rather than raising.
 Every call carries its own timeout — `CLI_TIMEOUT_SECONDS = 60` for
 everything except `launch`, which gets `LAUNCH_TIMEOUT_SECONDS = 180`
 because it also pulls and boots an image — and a timeout or a non-zero exit
@@ -90,15 +90,15 @@ takes this seat."
 one dispatch table keyed by action name — `"kill"` to `provider.kill`,
 `"stop"` to `provider.stop`, `"delete"` to `provider.terminate` — called
 with `vm_id`, followed by `registry.emit("chaos", "chaos", ...)`, so every
-chaos action leaves the same event trail a real failure would. It is shared code: both `make
-chaos-kill`/`chaos-stop`/`chaos-delete` and the dashboard's chaos endpoint
-call this one function. Each action reaches the reconciler by a different
-path traced in `sandbox/manager/reconciler.py`. `kill` sends `container
-kill --signal KILL`; the container then reports a state inside
+chaos action leaves the same event trail a real failure would. It is shared
+code: both `make chaos-kill`/`chaos-stop`/`chaos-delete` and the dashboard's
+chaos endpoint call this one function. Each action reaches the reconciler by
+a different path traced in `sandbox/manager/reconciler.py`. `kill` sends
+`container kill --signal KILL`; the container then reports a state inside
 `DEAD_STATES`, so `health` matches its `provider_ref` in `stopped_refs` and
 calls `_write_off(vm_id, "instance stopped", "write_off_stopped", ...)`
-before `capacity` launches a replacement. `delete` runs `container delete
---force`, which removes the container from `container ls --all` entirely;
+before `capacity` launches a replacement. `delete` runs
+`container delete --force`, which removes the container from `container ls --all` entirely;
 `health` finds the row's ref in neither `live_refs` nor `stopped_refs` and
 calls `_write_off(vm_id, "instance missing", "write_off_missing", ...)`
 instead. `stop` sends `container stop --time 20`, a plain `SIGTERM` the VM
@@ -119,7 +119,8 @@ has to notice at all.
   `vm_environment`.
 - `sandbox/manager/launch_vm.py` — the manual, one-VM launcher.
 - `sandbox/manager/chaos.py` — `apply`, `ACTIONS`.
-- `scripts/up.sh` — the gateway discovery and the `.env` it writes.
+- `scripts/up.sh` — the gateway default and its override, and the `.env` it
+  writes.
 - `scripts/build-image.sh` — the lockfile export `container build` installs
   from.
 
@@ -142,8 +143,8 @@ directly, not a silent behavior change.
 
 ## Try it
 
-Find an idle VM's id in `make show`, then run `make chaos-kill VM=<that
-id>`. Watch `make show`: a `write_off_stopped` event appears once the next
+Find an idle VM's id in `make show`, then run
+`make chaos-kill VM=<that id>`. Watch `make show`: a `write_off_stopped` event appears once the next
 reconciler pass's health step sees the container's dead state, followed by
 a `launch` event as capacity replaces it.
 

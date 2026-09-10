@@ -6,12 +6,12 @@ orchestrator asks for a VM to the moment that VM goes back to idle.
 
 ## The picture
 
-Spec §3 draws the target architecture; this is the same shape, redrawn for
-what actually runs on a laptop today. Three host processes — `manager`,
-`orchestrator`, `status` — are started together by `make workers`, because
-that is what the `Procfile` lists and what `honcho start` runs. The Temporal
-dev server and `moto_server` are separate processes `make up` starts before
-any of that.
+Spec §3 draws the target architecture; this is the same shape, redrawn for what
+actually runs on a laptop today. Three host processes — `manager`,
+`orchestrator`, `status` — are started together by `make workers`, because that
+is what the `Procfile` lists and what `honcho start` runs. The Temporal dev
+server and `moto_server` are separate processes `make up` starts before any of
+that.
 
 ```
 host: temporal dev server            host: honcho (make workers)
@@ -41,10 +41,10 @@ host: temporal dev server            host: honcho (make workers)
                                       └────────────────────────────────┘
 ```
 
-The orchestrator worker only ever talks to Temporal, never to a machine
-directly — `sandbox.client` is the only import standing between it and a
-queue name. Execution activities skip the manager entirely once a lease
-exists: they run straight on the VM's own queue.
+The orchestrator worker only ever talks to Temporal, never to a machine directly
+— `sandbox.client` is the only import standing between it and a queue name.
+Execution activities skip the manager entirely once a lease exists: they run
+straight on the VM's own queue.
 
 ## The components
 
@@ -60,10 +60,10 @@ goes through typed methods here, with the right queue, timeout, and error
 translation already attached.
 
 **Manager, with the reconciler** (`sandbox/manager/`,
-`sandbox/manager/reconciler.py`) — hosts the `acquire` and `release`
-activities plus a scheduled `ReconcileWorkflow`. It runs as its own process
-so a manager outage stalls neither a lease already granted nor a turn already
-running, because both go straight to a VM's queue.
+`sandbox/manager/reconciler.py`) — hosts the `acquire` and `release` activities
+plus a scheduled `ReconcileWorkflow`. It runs as its own process so a manager
+outage stalls neither a lease already granted nor a turn already running,
+because both go straight to a VM's queue.
 
 **Registry** (`sandbox/registry/`) — every read and write the manager, the VM
 agent, and the dashboard make against the system's real state. Its own
@@ -78,11 +78,11 @@ repository's integration tests, so a test exercises the real boot sequence.
 
 **Provider** (`sandbox/manager/providers/apple_container.py`) — launch,
 terminate, list, describe, kill, and stop, by shelling out to the `container`
-CLI and parsing its JSON. Every call carries its own timeout, because a
-wedged daemon must not be able to hold a manager activity thread forever.
+CLI and parsing its JSON. Every call carries its own timeout, because a wedged
+daemon must not be able to hold a manager activity thread forever.
 
-**Runner** (`sandbox/runner/`) — "the code the orchestrator ships to a VM,"
-in its own words: a CLI with five subcommands, versioned by the artifact the
+**Runner** (`sandbox/runner/`) — "the code the orchestrator ships to a VM," in
+its own words: a CLI with five subcommands, versioned by the artifact the
 orchestrator asks for, so the orchestrator — not the VM image — decides which
 runner runs.
 
@@ -91,8 +91,8 @@ built only on `sandbox.client`, plus the two small activities that read a
 runner envelope and publish a session summary without ever putting the object
 store inside the workflow sandbox.
 
-**Status** (`sandbox/status/`) — a FastAPI process that reads the registry,
-the provider, Temporal, and the object store, and serves one page. Its own
+**Status** (`sandbox/status/`) — a FastAPI process that reads the registry, the
+provider, Temporal, and the object store, and serves one page. Its own
 docstring: "the registry is the system's real state, but a demo needs to be
 watched, not queried."
 
@@ -100,30 +100,29 @@ watched, not queried."
 
 A `CodingSessionDemoWorkflow` run, from the orchestrator's perspective:
 
-1. The orchestrator worker, polling `orchestrator-queue`, starts the
-   workflow. It builds a `Sandbox` and enters `sandbox.lease(spec)`, which
-   calls `sandbox.v1.acquire` on `sandbox-manager-queue`.
-2. The manager claims an idle registry row and returns a `SandboxLease`
-   naming that VM's own queue — `sandbox-vm-<vm_id>`, built by
-   `vm_task_queue()` in `sandbox/contract/names.py`.
+1. The orchestrator worker, polling `orchestrator-queue`, starts the workflow.
+   It builds a `Sandbox` and enters `sandbox.lease(spec)`, which calls
+   `sandbox.v1.acquire` on `sandbox-manager-queue`.
+2. The manager claims an idle registry row and returns a `SandboxLease` naming
+   that VM's own queue — `sandbox-vm-<vm_id>`, built by `vm_task_queue()` in
+   `sandbox/contract/names.py`.
 3. Still inside the lease, the workflow calls `sandbox.v1.ensure_artifact` on
    that queue to fetch the runner artifact onto the VM, by URI and sha256.
-4. Each step of the session — clone, a turn, lint, test, and eventually
-   export — is its own `sandbox.v1.exec_start` / `sandbox.v1.exec_wait` pair
-   on the same VM queue, built by `run_step` in `sandbox/orchestrator/
-   steps.py`.
-5. Turns repeat, feeding the previous test failure back in as the next
-   turn's context, until the tests pass or `max_turns` is reached.
-6. The workflow pulls the resulting patch back with `sandbox.v1.get_file`,
-   then publishes a summary through the orchestrator's own
+4. Each step of the session — clone, a turn, lint, test, and eventually export —
+   is its own `sandbox.v1.exec_start` / `sandbox.v1.exec_wait` pair on the same
+   VM queue, built by `run_step` in `sandbox/orchestrator/steps.py`.
+5. Turns repeat, feeding the previous test failure back in as the next turn's
+   context, until the tests pass or `max_turns` is reached.
+6. The workflow pulls the resulting patch back with `sandbox.v1.get_file`, then
+   publishes a summary through the orchestrator's own
    `orchestrator.publish_summary` activity.
 7. `lease()`'s `finally` calls `sandbox.v1.release` on `sandbox-manager-queue`.
    The manager flips the row to `recycling`; the VM agent notices on its next
    heartbeat, wipes the workspace, and flips itself back to `idle`.
 8. If the lease is lost partway through, the workflow catches `LeaseLost` and
    retries the whole loop from step 1 — up to `max_lease_attempts` times —
-   resuming from the session bundle the runner saved after the last turn
-   that actually finished.
+   resuming from the session bundle the runner saved after the last turn that
+   actually finished.
 
 ## What talks to what
 
@@ -144,16 +143,17 @@ A `CodingSessionDemoWorkflow` run, from the orchestrator's perspective:
   code behind the numbered flow above.
 - `sandbox/client/sandbox.py` — `Sandbox.acquire`, `.release`, and `.lease()`,
   where each queue name is actually used in a `workflow.execute_activity` call.
-- `sandbox/manager/reconciler.py` — the reconciler steps behind "the fleet
-  heals itself."
+- `sandbox/manager/reconciler.py` — the reconciler steps behind "the fleet heals
+  itself."
 - `sandbox/status/api.py` — the joins behind the dashboard's one page.
 - `Procfile` — the three host processes `make workers` starts together.
 
 ## Where this maps in production
 
-Spec §4's component table gives each piece here a named production
-successor: the orchestrator worker becomes the `agent-orchestrator` worker on EKS
-running the production agent; the sandbox manager worker becomes a `sandbox-manager`
+Spec §4's component table gives each piece here a named production successor:
+the orchestrator worker becomes the orchestrator worker on EKS —
+`sandbox-orchestrator` in its own docstring, the `agent-orchestrator` deploy in spec §4's
+table — running the production agent; the sandbox manager worker becomes a `sandbox-manager`
 worker on EKS; the registry's DynamoDB API, mocked locally by `moto_server`,
 becomes real DynamoDB; the provider's Apple `container` calls become EC2 and
 ASG APIs; the VM agent ships unchanged as the package an AMI installs; the
@@ -164,6 +164,6 @@ production target already.
 
 ## Try it
 
-Nothing to run yet; chapter 08 runs all of it.
+Nothing to run yet; [chapter 08](08-running-the-demo.md) runs all of it.
 
 Next: [02 · The contract: what a workflow may ask a VM](02-the-contract.md)

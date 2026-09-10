@@ -26,6 +26,7 @@ PATH_RE = re.compile(
 )
 MAKE_RE = re.compile(r"`make ([a-z][a-z-]*)")
 LINK_RE = re.compile(r"\]\(([^)#\s]+)(?:#[^)]*)?\)")
+FENCE_RE = re.compile(r"```.*?```", re.S)
 
 
 def _existing_chapters() -> list[Path]:
@@ -35,6 +36,22 @@ def _existing_chapters() -> list[Path]:
 def _make_targets() -> set[str]:
     text = (ROOT / "Makefile").read_text()
     return set(re.findall(r"^([a-z][a-z-]*):", text, re.M))
+
+
+def _wrapped_code_spans(text: str) -> list[str]:
+    """Inline code spans (fenced ``` blocks excluded) whose content contains a
+    raw newline: the span was hard-wrapped across lines by an editor, so
+    PATH_RE/MAKE_RE cannot match it and it renders with a stray space.
+
+    A naive `` `[^`\\n]+\\n[^`]*` `` search (matching a backtick, then a
+    newline, then a run up to the next backtick) also fires on two distinct,
+    correctly-closed spans separated by nothing but plain prose and a line
+    break — the ordinary shape of hard-wrapped, code-reference-heavy prose.
+    Splitting on backtick, after stripping fenced blocks, pairs each span
+    with its own closing backtick and checks only that content for a newline.
+    """
+    parts = FENCE_RE.sub("", text).split("`")
+    return [part for part in parts[1::2] if "\n" in part]
 
 
 def test_every_chapter_exists():
@@ -77,6 +94,7 @@ def test_paths_targets_and_links_resolve(doc):
         if target.startswith(("http://", "https://", "mailto:")):
             continue
         assert (doc.parent / target).exists(), f"{doc.name} links to missing {target}"
+    assert not _wrapped_code_spans(text), f"{doc.name} has a code span wrapped across lines"
 
 
 def test_readme_indexes_every_chapter():

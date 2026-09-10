@@ -164,8 +164,8 @@ the interpreter.
 ## Try it
 
 Run `make session SCENARIO=multiply-with-bug TURN_SECONDS=60`, then find the
-leased VM's id in `make show` while turn 2 is running and run `make
-chaos-kill VM=<that id>` mid-turn. `make show` prints the same
+leased VM's id in `make show` while turn 2 is running and run
+`make chaos-kill VM=<that id>` mid-turn. `make show` prints the same
 `write_off_stopped` and replacement `launch` events as chapter 05; the
 session workflow retries onto the new VM, and its printed result shows two
 lease attempts and two different VM ids, with the same turn count and

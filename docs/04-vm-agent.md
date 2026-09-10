@@ -56,8 +56,8 @@ as the job user, "where the job user is allowed to signal its own."
 written before spawning; an atomically-renamed `meta.json` holding
 `job_id`, `pid`, `pgid`, `started_at`; `stdout.log`/`stderr.log`; and an
 `exit` file the wrapper shell writes when the command ends — `_WRAPPER` is
-`'"$@"; rc=$?; printf "%s" "$rc" > "$0/exit.tmp"; mv "$0/exit.tmp"
-"$0/exit"; exit "$rc"'`, `$0` the job directory. A `reason` file records
+`'"$@"; rc=$?; printf "%s" "$rc" > "$0/exit.tmp"; mv "$0/exit.tmp" "$0/exit"; exit "$rc"'`,
+`$0` the job directory. A `reason` file records
 why the job was ended from outside; a `lost` marker dates whichever caller
 first notices the process gone with no exit file.
 
@@ -142,8 +142,8 @@ hands them to `agent`, since the Dockerfile's own comment explains git's
 safe.directory check refuses a repository owned by another user —
 permissions alone are not enough, so the seed goes to the user that
 actually clones it. `images/vm/entrypoint.sh` runs as root only long
-enough to `chown` the state directories, then `exec`s `setpriv
---reuid=sandbox-agent --regid=sandbox-agent` into `sandbox.vm_agent.worker`;
+enough to `chown` the state directories, then `exec`s
+`setpriv --reuid=sandbox-agent --regid=sandbox-agent` into `sandbox.vm_agent.worker`;
 `container run --init` supplies the init process that forwards `SIGTERM`
 into the drain above.
 
@@ -179,8 +179,8 @@ instead of a signal.
 ## Try it
 
 Run `make vms` to list the running Apple containers. Start `make hold`,
-note the leased VM's id from `make show`, then run `make chaos-stop
-VM=<that id>`. Watch `make show`: the row moves to `draining`, then to
+note the leased VM's id from `make show`, then run
+`make chaos-stop VM=<that id>`. Watch `make show`: the row moves to `draining`, then to
 `terminated` once the agent's own `finally` clause stops the worker —
 before the reconciler's next pass gets a chance to notice.
 
