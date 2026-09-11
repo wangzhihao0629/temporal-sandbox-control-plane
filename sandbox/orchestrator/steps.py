@@ -29,7 +29,15 @@ READ_ENVELOPE = "orchestrator.read_envelope"
 PUBLISH_SUMMARY = "orchestrator.publish_summary"
 STEP_BROKEN = "StepBroken"
 MAX_ENVELOPE_BYTES = 256 * 1024
-STEP_TIMEOUT_SECONDS = 120
+# Defaults for how long a step may run on the VM before the agent kills it. A
+# real agent turn can take hours, so these are session parameters carried on
+# `StepContext`, not constants the workflow cannot change. Nothing else bounds
+# a long step: the VM heartbeats and renews the lease for as long as the job
+# runs, and a restarted worker reattaches to the job record.
+STEP_TIMEOUT_SECONDS = 600
+TURN_TIMEOUT_SECONDS = 3600
+# A fake-agent turn paced to `seconds` must always fit, whatever the session's
+# turn timeout says.
 TURN_TIMEOUT_SLACK_SECONDS = 120
 
 
@@ -86,6 +94,8 @@ class StepContext:
     session_id: str
     attempt: int
     env: dict[str, str] = field(default_factory=dict)
+    step_timeout_seconds: int = STEP_TIMEOUT_SECONDS
+    turn_timeout_seconds: int = TURN_TIMEOUT_SECONDS
 
 
 def job_id(ctx: StepContext, step: str, turn: int) -> str:
@@ -116,9 +126,8 @@ def _spec(
 
 
 def clone_spec(ctx: StepContext, uris: SessionUris, repo: str) -> ExecSpec:
-    return _spec(
-        ctx, uris, "clone", 0, ["--repo", repo, "--session-uri", uris.session], STEP_TIMEOUT_SECONDS
-    )
+    args = ["--repo", repo, "--session-uri", uris.session]
+    return _spec(ctx, uris, "clone", 0, args, ctx.step_timeout_seconds)
 
 
 def turn_spec(
@@ -145,19 +154,21 @@ def turn_spec(
         "--agent",
         agent,
     ]
-    return _spec(ctx, uris, "turn", turn, args, seconds + TURN_TIMEOUT_SLACK_SECONDS)
+    timeout = max(ctx.turn_timeout_seconds, seconds + TURN_TIMEOUT_SLACK_SECONDS)
+    return _spec(ctx, uris, "turn", turn, args, timeout)
 
 
 def lint_spec(ctx: StepContext, uris: SessionUris, turn: int) -> ExecSpec:
-    return _spec(ctx, uris, "lint", turn, [], STEP_TIMEOUT_SECONDS)
+    return _spec(ctx, uris, "lint", turn, [], ctx.step_timeout_seconds)
 
 
 def test_spec(ctx: StepContext, uris: SessionUris, turn: int) -> ExecSpec:
-    return _spec(ctx, uris, "test", turn, [], STEP_TIMEOUT_SECONDS)
+    return _spec(ctx, uris, "test", turn, [], ctx.step_timeout_seconds)
 
 
 def export_spec(ctx: StepContext, uris: SessionUris, turn: int) -> ExecSpec:
-    return _spec(ctx, uris, "export", turn, ["--session-uri", uris.session], STEP_TIMEOUT_SECONDS)
+    args = ["--session-uri", uris.session]
+    return _spec(ctx, uris, "export", turn, args, ctx.step_timeout_seconds)
 
 
 async def _read_envelope(

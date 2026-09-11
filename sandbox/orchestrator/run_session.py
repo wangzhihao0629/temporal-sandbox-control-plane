@@ -32,6 +32,8 @@ def _args(argv):
     p.add_argument("--prompt", default="Add a multiply function to calc with a test")
     p.add_argument("--max-turns", type=int, default=3)
     p.add_argument("--turn-seconds", type=int, default=30)
+    p.add_argument("--turn-timeout", type=int, default=3600, help="seconds before a turn is killed")
+    p.add_argument("--step-timeout", type=int, default=600, help="the same for the other steps")
     p.add_argument("--agent", default="fake", choices=("fake", "claude"))
     p.add_argument("--session-id", default=f"demo-{uuid.uuid4().hex[:8]}")
     return p.parse_args(argv)
@@ -61,6 +63,8 @@ async def main(argv=None) -> int:
         scenario=args.scenario,
         max_turns=args.max_turns,
         turn_seconds=args.turn_seconds,
+        turn_timeout_seconds=args.turn_timeout,
+        step_timeout_seconds=args.step_timeout,
         agent=args.agent,
         pool=os.environ.get("SANDBOX_POOL", "demo"),
         profile=os.environ.get("SANDBOX_PROFILE", "local"),

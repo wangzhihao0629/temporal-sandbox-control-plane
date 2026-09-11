@@ -25,6 +25,10 @@ pulls off the VM, and `publish_summary` writes `summary.json` — per
 for opening a pull request: everything a reviewer or a dashboard needs, in
 one object with a predictable key."
 
+A turn may run for hours: `turn_timeout_seconds` (default 3600) bounds it,
+`step_timeout_seconds` (600) bounds the checks, and heartbeats renew the
+lease meanwhile.
+
 `SessionUris` builds every path from the session id: `session` is
 `s3://sandbox-sessions/<session_id>`, `envelope(job_id)` is
 `{session}/steps/{job_id}.json`, `log(job_id)` is its own prefix under

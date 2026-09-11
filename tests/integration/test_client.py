@@ -165,6 +165,38 @@ async def test_wait_reattaches_after_the_vm_worker_restarts(
         await vm.stop()
 
 
+async def test_a_job_longer_than_the_lease_hold_keeps_renewing_the_lease(
+    env, aws, manager, orchestrator, tmp_path
+):
+    # A long-running job outlives the lease hold it was claimed with. Every
+    # exec_wait heartbeat touches the lease, so the expiry keeps moving ahead of
+    # the clock and the reconciler never sees an expired lease on a live job.
+    registry, store = aws
+    vm = await InProcessVm(env.client, registry, store, tmp_path).start()
+    try:
+        handle = await env.client.start_workflow(
+            ExerciseWorkflow.run,
+            ExerciseParams(
+                scenario="long",
+                sleep_seconds=6,
+                hold_seconds=2,
+                workspace_root=str(vm.workspace_root),
+            ),
+            id=f"c-renew-{uuid.uuid4().hex[:8]}",
+            task_queue=orchestrator,
+        )
+        await _wait_job_started(registry, vm.vm_id)
+        first = registry.get_vm(vm.vm_id)["lease_expires_at"]
+        await asyncio.sleep(2.5)
+        row = registry.get_vm(vm.vm_id)
+        assert row["state"] == "leased" and row["lease_expires_at"] > first, "expiry advanced"
+        result = await handle.result()
+        assert result.outcome == "ok" and result.stdout == "done\n"
+        await _wait_state(registry, vm.vm_id, "idle")
+    finally:
+        await vm.stop()
+
+
 async def test_cancelling_the_workflow_kills_the_job_and_gives_the_vm_back(
     env, aws, manager, orchestrator, tmp_path
 ):

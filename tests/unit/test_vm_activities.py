@@ -72,3 +72,41 @@ def test_credential_shaped_identity_keys_are_refused_at_the_boundary(activities)
     with pytest.raises(ApplicationError) as err:
         activities._job_env(_spec(activities, env={"AWS_SECRET_ACCESS_KEY": "x"}))
     assert err.value.type == "Incompatible"
+
+
+class _RecordingStore:
+    def __init__(self):
+        self.uploads: list[str] = []
+
+    def upload_file(self, path, uri):
+        self.uploads.append(uri)
+        return 0
+
+
+def test_log_sync_uploads_only_grown_logs_and_not_more_often_than_the_cadence(
+    activities, monkeypatch
+):
+    # A job that runs for hours must not re-send its whole log every heartbeat.
+    activities.store = _RecordingStore()
+    log = activities.jobs.log_path("j1", "stdout")
+    log.parent.mkdir(parents=True)
+    log.write_text("line 1\n")
+    uri = "s3://sandbox-jobs/s/j1"
+
+    sizes = activities._sync_logs("j1", uri)
+    assert sizes["stdout"] == 7 and activities.store.uploads == [f"{uri}/stdout.log"]
+
+    activities._sync_logs("j1", uri)  # nothing new: no upload
+    log.write_text("line 1\nline 2\n")
+    activities._sync_logs("j1", uri)  # grown, but the cadence has not elapsed
+    assert len(activities.store.uploads) == 1
+
+    monkeypatch.setattr("sandbox.vm_agent.activities._LOG_SYNC_EVERY", 0.0)
+    activities._sync_logs("j1", uri)  # grown and due
+    assert len(activities.store.uploads) == 2
+
+    monkeypatch.setattr("sandbox.vm_agent.activities._LOG_SYNC_EVERY", 1000.0)
+    activities._sync_logs("j1", uri, force=True)  # the final flush ignores the cadence
+    assert len(activities.store.uploads) == 3 and "j1" not in activities._log_sync
+    assert activities._sync_logs("j1", "")["stdout"] == 14, "no uri: sizes only, no upload"
+    assert len(activities.store.uploads) == 3

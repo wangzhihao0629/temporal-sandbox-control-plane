@@ -44,9 +44,29 @@ def test_turn_spec_passes_feedback_or_none_and_pads_the_timeout():
     assert argv[2] == "turn" and argv[argv.index("--feedback-uri") + 1] == "none"
     assert argv[argv.index("--scenario") + 1] == "" and argv[argv.index("--agent") + 1] == "fake"
     assert argv[argv.index("--seconds") + 1] == "30"
-    assert spec.timeout_seconds == 30 + steps.TURN_TIMEOUT_SLACK_SECONDS
+    assert spec.timeout_seconds == CTX.turn_timeout_seconds == steps.TURN_TIMEOUT_SECONDS
     with_feedback = steps.turn_spec(CTX, URIS, 2, "p", "never-fixes", "s3://f", 0, "fake")
     assert with_feedback.argv[with_feedback.argv.index("--feedback-uri") + 1] == "s3://f"
+
+
+def test_timeouts_are_session_parameters_not_constants():
+    # A real agent turn can take hours; the session decides how long a step may
+    # run, and a fake-agent turn paced past the turn timeout still fits.
+    long = StepContext(
+        runner_path="/a",
+        workspace="/w",
+        session_id="s2",
+        attempt=1,
+        step_timeout_seconds=900,
+        turn_timeout_seconds=7200,
+    )
+    assert steps.clone_spec(long, URIS, "hello").timeout_seconds == 900
+    assert steps.lint_spec(long, URIS, 1).timeout_seconds == 900
+    assert steps.test_spec(long, URIS, 1).timeout_seconds == 900
+    assert steps.export_spec(long, URIS, 1).timeout_seconds == 900
+    assert steps.turn_spec(long, URIS, 1, "p", "", "", 30, "fake").timeout_seconds == 7200
+    paced = steps.turn_spec(long, URIS, 1, "p", "", "", 7500, "fake")
+    assert paced.timeout_seconds == 7500 + steps.TURN_TIMEOUT_SLACK_SECONDS
 
 
 def test_check_and_export_specs():

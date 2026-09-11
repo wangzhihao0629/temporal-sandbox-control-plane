@@ -61,7 +61,9 @@ session:
 	  $(if $(SCENARIO),--scenario $(SCENARIO)) \
 	  $(if $(PROMPT),--prompt "$(PROMPT)") \
 	  $(if $(TURNS),--max-turns $(TURNS)) \
-	  $(if $(TURN_SECONDS),--turn-seconds $(TURN_SECONDS))
+	  $(if $(TURN_SECONDS),--turn-seconds $(TURN_SECONDS)) \
+	  $(if $(TURN_TIMEOUT),--turn-timeout $(TURN_TIMEOUT)) \
+	  $(if $(STEP_TIMEOUT),--step-timeout $(STEP_TIMEOUT))
 
 chaos-kill:
 	$(UV) run python -m sandbox.manager.chaos kill $(VM)

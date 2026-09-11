@@ -51,6 +51,10 @@ from sandbox.vm_agent.validation import (
 
 _HEARTBEAT_EVERY = 5.0
 _POLL_EVERY = 1.0
+# Logs are uploaded whole, so a job that runs for hours would otherwise re-send
+# a growing file on every heartbeat. Sync only when the log has grown and at
+# most this often; the final flush after exit is unconditional.
+_LOG_SYNC_EVERY = 15.0
 _VM_IDENTITY_KEYS = (
     "S3_ENDPOINT",
     "AWS_ACCESS_KEY_ID",
@@ -87,6 +91,8 @@ class VmActivities:
         self.drain = drain
         self.artifacts = ArtifactCache(cfg.artifacts_dir, store)
         self.started_at = time.time()
+        # job_id -> (monotonic time of the last upload, sizes uploaded then)
+        self._log_sync: dict[str, tuple[float, dict[str, int]]] = {}
 
     def all(self) -> list:
         return [
@@ -148,19 +154,39 @@ class VmActivities:
         else:
             os.makedirs(cwd, exist_ok=True)
 
-    def _sync_logs(self, job_id: str, log_uri: str) -> dict[str, int]:
+    def _sync_logs(self, job_id: str, log_uri: str, force: bool = False) -> dict[str, int]:
+        """Report the log sizes and, when due, upload the logs whole.
+
+        Whole-file uploads cost the file's current size each time, so on a
+        long job they are rate-limited to `_LOG_SYNC_EVERY` and skipped while
+        nothing new was written. `force` is for the end of a job: the last
+        bytes must land whatever the clock says.
+        """
         sizes = {}
         for stream in ("stdout", "stderr"):
             path = self.jobs.log_path(job_id, stream)
             sizes[stream] = path.stat().st_size if path.exists() else 0
-            if log_uri and path.exists():
+        if not log_uri:
+            return sizes
+        last_at, last_sizes = self._log_sync.get(job_id, (0.0, {}))
+        now = time.monotonic()
+        due = force or (sizes != last_sizes and now - last_at >= _LOG_SYNC_EVERY)
+        if not due:
+            return sizes
+        for stream in ("stdout", "stderr"):
+            path = self.jobs.log_path(job_id, stream)
+            if path.exists():
                 self.store.upload_file(path, f"{log_uri.rstrip('/')}/{stream}.log")
+        if force:
+            self._log_sync.pop(job_id, None)
+        else:
+            self._log_sync[job_id] = (now, sizes)
         return sizes
 
     async def _stop_and_flush(self, job_id: str, log_uri: str, reason: str, grace: float) -> None:
         """Kill the job, then push whatever it wrote before it died."""
         await asyncio.to_thread(self.jobs.cancel, job_id, grace, reason)
-        await asyncio.to_thread(self._sync_logs, job_id, log_uri)
+        await asyncio.to_thread(self._sync_logs, job_id, log_uri, True)
 
     def _result(self, job_id: str, spec: ExecSpec) -> ExecResult:
         st = self.jobs.status(job_id)
@@ -263,7 +289,7 @@ class VmActivities:
                 raise
             await asyncio.shield(self._stop_and_flush(req.job_id, spec.log_uri, "cancelled", 10))
             raise
-        await asyncio.to_thread(self._sync_logs, req.job_id, spec.log_uri)
+        await asyncio.to_thread(self._sync_logs, req.job_id, spec.log_uri, True)
         result = self._result(req.job_id, spec)
         await asyncio.to_thread(
             self.registry.update_job,

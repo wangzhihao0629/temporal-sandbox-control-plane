@@ -16,6 +16,7 @@ class ExerciseParams:
     pool: str = "demo"
     sleep_seconds: int = 8
     workspace_root: str = WORKSPACE_ROOT
+    hold_seconds: int = 1800
 
 
 @dataclass
@@ -31,7 +32,9 @@ class ExerciseWorkflow:
     @workflow.run
     async def run(self, p: ExerciseParams) -> ExerciseResult:
         sandbox = Sandbox(Timeouts.test(), workspace_root=p.workspace_root)
-        spec = SandboxSpec(pool=p.pool, request_id=str(workflow.uuid4()))
+        spec = SandboxSpec(
+            pool=p.pool, request_id=str(workflow.uuid4()), hold_seconds=p.hold_seconds
+        )
         try:
             async with sandbox.lease(spec) as vm:
                 cwd = vm.workspace()

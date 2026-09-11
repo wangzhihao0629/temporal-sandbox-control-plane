@@ -137,7 +137,8 @@ which times only start-to-close on the manager queue.
 ### 9. Capacity
 
 Start three `make session` runs (`SCENARIO=`, `PROMPT=`, `TURNS=`,
-`TURN_SECONDS=`) in three terminals within a few seconds of each other against
+`TURN_SECONDS=`, `TURN_TIMEOUT=`, `STEP_TIMEOUT=`) in three terminals within
+a few seconds of each other against
 a two-VM floor (each blocks until its workflow finishes). The third's `acquire`
 raises `NoCapacity`, records a pending request, and sleeps under
 `WaitFor:SandboxCapacity`; the reconciler's capacity step folds that pending

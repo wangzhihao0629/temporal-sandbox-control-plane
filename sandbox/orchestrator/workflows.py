@@ -129,7 +129,9 @@ class CodingSessionParams:
     scenario: str = ""  # empty: the runner picks one from the prompt
     max_turns: int = 3
     max_lease_attempts: int = 3
-    turn_seconds: int = 30
+    turn_seconds: int = 30  # pacing for the fake agent, not a bound
+    turn_timeout_seconds: int = 3600  # the VM kills a turn that runs longer
+    step_timeout_seconds: int = 600  # the same for clone, lint, test, export
     agent: str = "fake"
     pool: str = "demo"
     profile: str = "local"
@@ -183,6 +185,8 @@ class CodingSessionDemoWorkflow:
                         session_id=p.session_id,
                         attempt=attempt,
                         env=p.runner_env,
+                        step_timeout_seconds=p.step_timeout_seconds,
+                        turn_timeout_seconds=p.turn_timeout_seconds,
                     )
                     clone = await run_step(vm, uris, clone_spec(ctx, uris, p.repo))
                     turn_no = int(clone["turn"])
