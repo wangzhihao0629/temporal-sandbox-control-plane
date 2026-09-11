@@ -6,8 +6,8 @@ one line per tool event and sleeping so a turn lasts about `seconds`;
 CLI instead.
 Why: the log tail is what the dashboard and the `exec_wait` heartbeats show,
 so the fake agent streams the same kind of output a real one does. Fake cost is
-a fixed amount per step so the summary can show a spend the way the production agent's cost
-events do. A missing edit target is the turn breaking, not a finding.
+a fixed amount per step so the summary can show a spend the way a production
+agent's cost events do. A missing edit target is the turn breaking, not a finding.
 Production: the real agent harness; the orchestrator does not care which.
 """
 

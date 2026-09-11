@@ -11,22 +11,22 @@ Spec §16's table, one sentence of reasoning added per row:
 
 | Demo piece | Becomes | Repo | Why |
 |---|---|---|---|
-| Apple `container` provider | EC2 over ASG and EC2 APIs, protection via instance protection | agent-host-repo or the manager repo | `sandbox/manager/providers/base.py` is the seam precisely so a backend swap needs no change above it, and the `protected` registry flag the reconciler already honors maps straight onto real instance protection. |
+| Apple `container` provider | EC2 over ASG and EC2 APIs, protection via instance protection | agent-host or manager repo | `sandbox/manager/providers/base.py` is the seam precisely so a backend swap needs no change above it, and the `protected` registry flag the reconciler already honors maps straight onto real instance protection. |
 | Host `moto_server` | real DynamoDB and S3, endpoints removed, IAM per writer | production Terraform | moto answers the same DynamoDB and S3 wire APIs `sandbox/registry/client.py` and `sandbox/objectstore.py` already call, so only the endpoint and the credential model change. |
-| Fake agent and seed repo | a real `claude -p` turn against real repos; clone/lint/test/export become `ProductionCodingWorkflow`'s own steps | orchestration-repo | `sandbox/runner/agent.py`'s own docstring says the orchestrator does not care which agent ran — the loop and the step shape are unchanged. |
-| Runner artifact, runner package only | a per-commit virtualenv built by CI | orchestration-repo | `sandbox/runner/package.py` already says why: the demo image supplies the dependencies, production supplies only the interpreter. |
-| Host workers | the orchestrator worker on EKS (`sandbox-orchestrator` in its own docstring, `agent-orchestrator` in spec §4's table) and `sandbox-manager` on EKS via platform worker bootstrap | orchestration-repo | chapter 01's component table already names these as the orchestrator and manager workers' production successors. |
-| VM agent in the image | the same package pinned in the Packer AMI, IMDS drain instead of `SIGTERM` | agent-host-repo | chapter 04's mapping already shows most of the package saying "Production: identical" in its own docstring; only the config source, the heartbeat interval, and the drain trigger actually move. |
+| Fake agent and seed repo | a real `claude -p` turn against real repos; clone/lint/test/export become the production workflow's own steps | orchestration repo | `sandbox/runner/agent.py`'s own docstring says the orchestrator does not care which agent ran — the loop and the step shape are unchanged. |
+| Runner artifact, runner package only | a per-commit virtualenv built by CI | orchestration repo | `sandbox/runner/package.py` already says why: the demo image supplies the dependencies, production supplies only the interpreter. |
+| Host workers | the orchestrator worker on EKS (`sandbox-orchestrator` in its own docstring) and `sandbox-manager` on EKS via the platform's worker bootstrap | orchestration repo | chapter 01's component table already names these as the orchestrator and manager workers' production successors. |
+| VM agent in the image | the same package pinned in the Packer AMI, IMDS drain instead of `SIGTERM` | agent-host repo | chapter 04's mapping already shows most of the package saying "Production: identical" in its own docstring; only the config source, the heartbeat interval, and the drain trigger actually move. |
 | `sandbox.contract`, `sandbox.client` | one wheel both repos depend on | new | each module already claims to be production-identical, which is what makes shipping it as a shared dependency rather than duplicated code possible at all. |
-| Status page | an internal dashboard app over the same API | dashboard-platform-repo | chapter 07's own mapping: nothing about the endpoint shapes or the join logic changes, only the identity behind the Temporal client and the provider. |
-| `summary.json` as the result | a pull request | orchestration-repo | the orchestrator's own activities docstring calls the summary a stand-in for opening one: the same information, a different destination. |
+| Status page | an internal dashboard app over the same API | dashboard platform repo | chapter 07's own mapping: nothing about the endpoint shapes or the join logic changes, only the identity behind the Temporal client and the provider. |
+| `summary.json` as the result | a pull request | orchestration repo | the orchestrator's own activities docstring calls the summary a stand-in for opening one: the same information, a different destination. |
 
-## The phases in orchestration-repo
+## The phases in the orchestration repo
 
 Spec §16 lists five phases, all gated behind one flag so the existing macOS path
 keeps serving traffic until each phase is ready:
 
-1. **Extract the runner CLI from `macos_dispatch`.** Moves its existing macOS turn
+1. **Extract the runner CLI from the macOS dispatch module.** Moves its existing macOS turn
    logic into a CLI shaped like `sandbox/runner`. What proves it: that CLI runs
    the existing macOS path unchanged, with no VM involved yet.
 2. **Ship the VM agent, registry, manager, and a second pool.** Moves this
@@ -40,7 +40,7 @@ keeps serving traffic until each phase is ready:
    showing `sandbox.v1.exec_start`/`exec_wait` pairs per step, the shape
    `CodingSessionDemoWorkflow` already produces, instead of one long
    macOS-resident step.
-4. **Move the macOS path and agent platform onto the interface.** Moves every
+4. **Move the macOS path and the agent platform onto the interface.** Moves every
    remaining caller onto `sandbox.client` so nothing but the contract talks to
    a VM. What proves it: both callers importing only `sandbox.client`, the same
    constraint chapter 01 states for this demo's own orchestrator.
@@ -124,8 +124,8 @@ the shortcut.
 
 Every row in the table above already names its successor repo, so this chapter
 adds no separate mapping of its own: its "production" is
-orchestration-repo, agent-host-repo, dashboard-platform-repo, and
-production Terraform, picking up the five phases above, behind spec
+the orchestration repo, the agent-host repo, the dashboard platform repo, and
+the production Terraform, picking up the five phases above, behind spec
 §16's flag.
 
 ## Try it

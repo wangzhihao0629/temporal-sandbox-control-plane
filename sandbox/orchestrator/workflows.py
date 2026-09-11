@@ -155,7 +155,7 @@ class CodingSessionResult:
 
 @workflow.defn
 class CodingSessionDemoWorkflow:
-    """A coding session the way ProductionCodingWorkflow runs one in production.
+    """A coding session the way the production agent workflow runs one.
 
     clone, then turn / lint / test until the tests pass or max_turns is
     reached, then export and publish a summary. Every step is one exec

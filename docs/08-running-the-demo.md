@@ -137,8 +137,7 @@ which times only start-to-close on the manager queue.
 ### 9. Capacity
 
 Start three `make session` runs (`SCENARIO=`, `PROMPT=`, `TURNS=`,
-`TURN_SECONDS=`, `TURN_TIMEOUT=`, `STEP_TIMEOUT=`) in three terminals within
-a few seconds of each other against
+`TURN_SECONDS=`, `TURN_TIMEOUT=`, `STEP_TIMEOUT=`) in three terminals at once against
 a two-VM floor (each blocks until its workflow finishes). The third's `acquire`
 raises `NoCapacity`, records a pending request, and sleeps under
 `WaitFor:SandboxCapacity`; the reconciler's capacity step folds that pending
@@ -222,10 +221,10 @@ threshold plus half a second before asserting a pass acted on it.
 
 Nothing in this chapter's own layer ships anywhere — spec §12's tools and make
 targets are ergonomics around code every earlier chapter already mapped.
-`make up`, `image`, and `workers` become platform worker bootstrap-managed EKS
+`make up`, `image`, and `workers` become platform-managed EKS
 deploys of the same orchestrator, manager, and VM agent packages;
 `make session`/`demo` become a self-service portal action or a real
-`ProductionCodingWorkflow` start; the CLIs under `sandbox/manager` become the
+the production agent workflow start; the CLIs under `sandbox/manager` become the
 dashboard's own write endpoints chapter 07 already covers, or an operator
 action from the Temporal UI directly. Only the entry point changes.
 

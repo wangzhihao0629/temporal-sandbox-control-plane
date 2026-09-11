@@ -7,8 +7,7 @@ competing designs this project picked and why.
 
 ## The problem today
 
-Spec §1 names the starting point plainly: coding agents such as the production agent's
-`ProductionCodingWorkflow` run today with the Temporal worker on the same EC2 host
+Spec §1 names the starting point plainly: production coding agents run today with the Temporal worker on the same EC2 host
 that executes the agent. The worker process, the Claude Code subprocess, and
 the git checkout share one process tree. Nothing enforces a boundary between
 "the code that decides what happens next" and "the code that happens to be
@@ -134,8 +133,7 @@ provider, and object store the workflow and the VM agent actually use.
 
 Every workflow class in this repository names its production counterpart in its
 own docstring, and this chapter's fork is no exception:
-`sandbox/orchestrator/workflows.py` says outright that `ProductionAgentWorkflow` and
-`ProductionCodingWorkflow` are the real callers a production version of this
+`sandbox/orchestrator/workflows.py` says outright that the production coding-agent workflows are the real callers a production version of this
 contract would serve. The contract itself carries no production-specific code
 to swap out — `sandbox/contract/names.py` says its production behavior is
 "identical" — because the whole point of a small, versioned interface is that

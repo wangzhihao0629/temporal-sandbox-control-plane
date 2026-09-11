@@ -9,7 +9,7 @@ swapped for `claude -p`.
 ## The shape of a session
 
 `CodingSessionDemoWorkflow`'s own docstring calls it "a coding session the way
-`ProductionCodingWorkflow` runs one in production": clone, then turn, lint, and
+the production agent workflow runs one": clone, then turn, lint, and
 test until tests pass or `max_turns` is reached, then export and publish a
 summary. Every step is its own exec activity, so a Temporal UI search or a
 job log filename names the step without opening an envelope — `steps.py`'s
@@ -25,9 +25,8 @@ pulls off the VM, and `publish_summary` writes `summary.json` — per
 for opening a pull request: everything a reviewer or a dashboard needs, in
 one object with a predictable key."
 
-A turn may run for hours: `turn_timeout_seconds` (default 3600) bounds it,
-`step_timeout_seconds` (600) bounds the checks, and heartbeats renew the
-lease meanwhile.
+A turn may run for hours: `turn_timeout_seconds` (3600) and
+`step_timeout_seconds` (600) are its only bounds; heartbeats renew the lease.
 
 `SessionUris` builds every path from the session id: `session` is
 `s3://sandbox-sessions/<session_id>`, `envelope(job_id)` is
@@ -121,7 +120,7 @@ missing target, ending the turn as broken. Each step prints a line —
 prior failure — the same lines the dashboard's log tail and `exec_wait`'s
 heartbeats show live. Each step kind costs a fixed amount (`read` 0.002,
 `think` 0.010, `edit` 0.020, `run` 0.005), summed into `fake_cost_usd` so the
-summary shows a spend the way the production agent's cost events do.
+summary shows a spend the way a production agent's cost events do.
 
 ## Real mode
 
@@ -157,8 +156,7 @@ clone, lint, test, the loop, and export are unchanged.
 
 ## Where this maps in production
 
-`workflows.py` names its real callers directly: `ProductionAgentWorkflow` and
-`ProductionCodingWorkflow`. `steps.py`, `checks.py`, and `session.py` each call
+`workflows.py` names its real callers directly: the production coding-agent workflows. `steps.py`, `checks.py`, and `session.py` each call
 themselves identical in production, over real S3 instead of moto. `package.py`
 says the artifact changes shape: today it carries only the runner because the
 image already has its dependencies; in production it is a per-commit
