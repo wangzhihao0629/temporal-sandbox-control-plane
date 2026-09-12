@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sandbox Control Plane</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#F4F6F6;
+    --surface:#FFFFFF;
+    --surface-2:#EAEEEE;
+    --ink:#15191B;
+    --ink-muted:#4B5457;
+    --ink-faint:#7A8386;
+    --border:#D7DCDC;
+    --accent-orch:#1E7F72;
+    --accent-orch-bg:#E4F1EE;
+    --accent-mgr:#33548F;
+    --accent-mgr-bg:#E7ECF6;
+    --accent-vm:#B65A24;
+    --accent-vm-bg:#F5E9DF;
+    --flag:#8B6B14;
+    --flag-bg:#F4EDD8;
+    --flag-border:#D9C482;
+    --diagram-bg:#FBFAF6;
+    --diagram-ink:#1A1D1E;
+    --diagram-border:#DAD6C9;
+    --diagram-line:#8A8578;
+    --shadow: 0 1px 2px rgba(20,25,26,.05), 0 6px 20px rgba(20,25,26,.06);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#111619;
+      --surface:#171D21;
+      --surface-2:#1D2429;
+      --ink:#E7ECEC;
+      --ink-muted:#9FACAF;
+      --ink-faint:#71807F;
+      --border:#2B3438;
+      --accent-orch:#3FBBA5;
+      --accent-orch-bg:#17302D;
+      --accent-mgr:#8FAAE8;
+      --accent-mgr-bg:#1B2436;
+      --accent-vm:#E39159;
+      --accent-vm-bg:#332318;
+      --flag:#E1BB5C;
+      --flag-bg:#2E2916;
+      --flag-border:#5A4C22;
+      --diagram-bg:#FBFAF6;
+      --diagram-ink:#1A1D1E;
+      --diagram-border:#DAD6C9;
+      --diagram-line:#8A8578;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#111619;
+    --surface:#171D21;
+    --surface-2:#1D2429;
+    --ink:#E7ECEC;
+    --ink-muted:#9FACAF;
+    --ink-faint:#71807F;
+    --border:#2B3438;
+    --accent-orch:#3FBBA5;
+    --accent-orch-bg:#17302D;
+    --accent-mgr:#8FAAE8;
+    --accent-mgr-bg:#1B2436;
+    --accent-vm:#E39159;
+    --accent-vm-bg:#332318;
+    --flag:#E1BB5C;
+    --flag-bg:#2E2916;
+    --flag-border:#5A4C22;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size:16px;
+    line-height:1.6;
+    padding:0 20px;
+  }
+  .page{ max-width:800px; margin:0 auto; padding-block:40px 80px; }
+
+  h1,h2,h3{ font-family:"Archivo", "Helvetica Neue", Arial, sans-serif; text-wrap:balance; color:var(--ink); margin:0; }
+  .eyebrow{
+    font-family:"IBM Plex Mono", ui-monospace, monospace;
+    font-size:.72rem; font-weight:600; letter-spacing:.11em; text-transform:uppercase;
+    color:var(--ink-faint);
+    margin:0 0 10px;
+  }
+  code, .mono{ font-family:"IBM Plex Mono", ui-monospace, monospace; }
+
+  header.hero{ margin-bottom:36px; }
+  header.hero h1{ font-size:clamp(1.8rem,4vw,2.5rem); font-weight:800; letter-spacing:-.01em; margin-bottom:14px; }
+  header.hero p.thesis{ font-size:1.09rem; color:var(--ink-muted); max-width:62ch; margin:0 0 18px; }
+  .provenance{
+    display:flex; flex-wrap:wrap; gap:8px 18px; align-items:center;
+    font-family:"IBM Plex Mono", monospace; font-size:.76rem; color:var(--ink-faint);
+    padding-top:14px; border-top:1px solid var(--border);
+  }
+  .provenance b{ color:var(--ink-muted); font-weight:600; }
+
+  section{ margin-top:52px; }
+  section > h2{ font-size:1.02rem; }
+
+  .queue-row{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-top:8px; }
+  @media (max-width:640px){ .queue-row{ grid-template-columns:1fr; } }
+  .queue-card{
+    border-radius:10px; padding:16px 18px; border-top:3px solid var(--c);
+    background:var(--bgc); box-shadow:var(--shadow);
+  }
+  .queue-card .qname{ font-family:"IBM Plex Mono",monospace; font-weight:600; font-size:.92rem; color:var(--c); display:block; margin-bottom:8px; word-break:break-word; }
+  .queue-card p{ margin:0; font-size:.9rem; color:var(--ink-muted); line-height:1.5; }
+  .queue-card.orch{ --c:var(--accent-orch); --bgc:var(--accent-orch-bg); }
+  .queue-card.mgr{ --c:var(--accent-mgr); --bgc:var(--accent-mgr-bg); }
+  .queue-card.vm{ --c:var(--accent-vm); --bgc:var(--accent-vm-bg); }
+
+  .diagram-card{
+    background:var(--diagram-bg); color:var(--diagram-ink);
+    border:1px solid var(--diagram-border); border-radius:12px;
+    padding:18px 6px 10px; margin-top:16px; box-shadow:var(--shadow);
+    overflow-x:auto;
+  }
+  .diagram-card .pre-wrap{ min-width:560px; }
+  .diagram-caption{ font-size:.82rem; color:var(--ink-faint); margin-top:10px; font-style:italic; }
+
+  p{ margin:0 0 14px; max-width:68ch; }
+  ul.proves{ margin:8px 0 0; padding-left:0; list-style:none; display:flex; flex-direction:column; gap:14px; }
+  ul.proves li{ display:grid; grid-template-columns:28px 1fr; gap:12px; align-items:baseline; }
+  ul.proves li .n{ font-family:"IBM Plex Mono",monospace; color:var(--ink-faint); font-size:.85rem; }
+  ul.proves li b{ font-family:"Archivo",sans-serif; font-weight:700; }
+
+  .fixnote{
+    background:var(--flag-bg); border:1px solid var(--flag-border); color:var(--ink);
+    border-radius:8px; padding:12px 14px; margin:10px 0 0; font-size:.88rem; line-height:1.55;
+  }
+  .fixnote .tag{ font-family:"IBM Plex Mono",monospace; font-size:.7rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--flag); display:inline-block; margin-bottom:5px; }
+  .fixnote code{ background:var(--surface-2); padding:.05em .3em; border-radius:4px; font-size:.85em; }
+  .cite{ color:var(--ink-faint); font-size:.82em; }
+
+  .corrections{ display:flex; flex-direction:column; gap:12px; margin-top:10px; }
+  .corrections .fixnote b{ display:block; margin-bottom:3px; }
+
+  footer{ margin-top:64px; padding-top:18px; border-top:1px solid var(--border); font-size:.82rem; color:var(--ink-faint); font-family:"IBM Plex Mono",monospace; }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <header class="hero">
+    <h1>Sandbox Control Plane</h1>
+    <p class="thesis">A Temporal workflow leases a VM, drives it through nine versioned activities, and hands it back. The workflow never runs on the machine it uses.</p>
+    <div class="provenance">
+      <span><b>Verified against</b> <code>sandbox/</code> at commit <code>6049106</code> (2026-09-10)</span>
+      <span><b>Original diagram</b> corrected in 5 places — flagged inline</span>
+    </div>
+  </header>
+
+  <section>
+    <p class="eyebrow">Task queues</p>
+    <div class="queue-row">
+      <div class="queue-card orch">
+        <span class="qname">orchestrator-queue</span>
+        <p>The demo workflows and their two orchestrator-side activities, <code>read_envelope</code> and <code>publish_summary</code>.</p>
+      </div>
+      <div class="queue-card mgr">
+        <span class="qname">sandbox-manager-queue</span>
+        <p><code>acquire</code> and <code>release</code>, plus the scheduled reconciler workflow.</p>
+      </div>
+      <div class="queue-card vm">
+        <span class="qname">sandbox-vm-&lt;vm_id&gt;</span>
+        <p>One queue per VM — only that VM's own agent polls it, running the exec/file activities.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Components and what talks to what</p>
+    <div class="diagram-card">
+<pre class="mermaid pre-wrap">
+flowchart TB
+  subgraph HOST["Host processes — make workers"]
+    OW["Orchestrator worker
+CodingSessionDemoWorkflow
+SmokeWorkflow, HoldWorkflow"]
+    MW["Manager worker
+acquire / release
+ReconcileWorkflow every 15s"]
+    API["Status API :8600
+the dashboard"]
+  end
+  subgraph INFRA["Shared infrastructure"]
+    T["Temporal :7233 · UI :8233
+queues: orchestrator, manager, one per VM"]
+    DB["DynamoDB — moto :5050
+VM rows, leases, jobs, events, requests"]
+    S3B["S3 — moto :5050
+artifacts, job logs, bundles, outputs"]
+  end
+  subgraph MACHINE["Machine side"]
+    AGENT["VM agent
+polls sandbox-vm-&lt;id&gt;"]
+    JOB["Job, as the agent user
+bin/runner: clone, turn, lint, test, export"]
+    VM["Apple container VM
+sbx-*"]
+  end
+
+  OW -->|workflows &amp; activities| T
+  MW -->|acquire / release| T
+  MW -->|leases, policy, events| DB
+  API -->|rows, jobs, events| DB
+  API -->|summaries, log tails| S3B
+  API -->|owner workflow status| T
+  T -->|"exec_start / exec_wait / put_file / get_file /
+ensure_artifact / exec_cancel / describe"| AGENT
+  AGENT -.->|"register, heartbeat, touch_lease
+direct writes — not Temporal"| DB
+  AGENT -->|sudo -u agent| JOB
+  JOB -->|bundle, session.json, envelopes| S3B
+  AGENT -->|"container run / ls / kill
+via sudo"| VM
+</pre>
+    </div>
+    <p class="diagram-caption">The orchestration side is the top row, the machine side the bottom. The only thing crossing between them is a task queue named after one VM; the only bytes that cross are URIs through S3, never Temporal payloads.</p>
+    <div class="fixnote">
+      <span class="tag">Corrected</span>
+      The original showed <code>register</code>, <code>heartbeat</code>, and <code>touch_lease</code> as activities on the VM's own <code>sandbox.v1.*</code> queue. They aren't Temporal calls at all — the agent writes them straight to the registry (DynamoDB), bypassing Temporal entirely.
+      <span class="cite">sandbox/vm_agent/runtime.py:65 · heartbeat.py:41 · registry/client.py:371</span>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">One coding session, activity by activity</p>
+    <div class="diagram-card">
+<pre class="mermaid pre-wrap">
+sequenceDiagram
+    participant WF as Workflow
+    participant MG as Manager
+    participant VA as VM agent
+    participant JB as Job (runner)
+    participant S3 as S3
+
+    WF->>MG: sandbox.v1.acquire(pool demo, request_id)
+    MG-->>WF: SandboxLease{vm_id, task_queue, lease_id}
+    WF->>VA: sandbox.v1.ensure_artifact(runner tar, sha256)
+    VA->>S3: download, verify, unpack under the digest
+    WF->>VA: exec_start clone
+    VA->>JB: sudo -u agent bin/runner clone
+    JB->>S3: seed or restore repo.bundle, write clone envelope
+    WF->>VA: exec_wait (heartbeats every 5s, touches the lease)
+    VA-->>WF: ExecResult exited 0
+    WF->>S3: orchestrator.read_envelope → {turn: 0}
+    loop until tests pass or max_turns
+        WF->>VA: exec_start / exec_wait turn
+        VA->>JB: bin/runner turn --feedback-uri (last test report)
+        JB->>S3: commit, repo.bundle, session.json, turn envelope
+        WF->>VA: exec_start / exec_wait lint
+        WF->>VA: exec_start / exec_wait test
+        WF->>S3: read_envelope ×3 (failures are data, not errors)
+    end
+    WF->>VA: exec_start / exec_wait export
+    WF->>VA: sandbox.v1.get_file session.patch → sandbox-out
+    WF->>S3: orchestrator.publish_summary summary.json
+    WF->>MG: sandbox.v1.release(lease_id, recycle)
+    Note over VA: heartbeat loop sees recycling → wipes workspace → idle (agent-driven, no workflow involved)
+</pre>
+    </div>
+    <p class="diagram-caption">Twenty-nine activities for a two-turn session: one acquire, one artifact, eight steps of start/wait/read, one file, one summary, one release. If the VM dies mid-turn, <code>exec_wait</code> raises <code>LeaseLost</code>, release runs from the <code>finally</code>, and the loop leases another VM whose clone restores the bundle saved after the last finished turn.</p>
+    <div class="fixnote">
+      <span class="tag">Corrected</span>
+      <code>read_envelope</code> and <code>publish_summary</code> live in their own <code>orchestrator.*</code> namespace, not <code>sandbox.v1.*</code> — and the full <code>sandbox.v1.*</code> roster also includes <code>exec_cancel</code>, <code>put_file</code>, and <code>describe</code>, none of which this particular session exercises.
+      <span class="cite">sandbox/orchestrator/steps.py:28–29 · activities.py:39,55 · sandbox/manager/activities.py:47,82 · vm_agent/activities.py:212–329</span>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">A VM's life in the registry</p>
+    <div class="diagram-card">
+<pre class="mermaid pre-wrap">
+stateDiagram-v2
+    [*] --> booting: reconciler launches\n(deficit = floor + pending − available)
+    booting --> idle: agent registers, worker up
+    idle --> leased: acquire\n(conditional write, oldest first)
+    leased --> recycling: release (recycle)
+    leased --> terminating: release (destroy)
+    leased --> draining: agent's own SIGTERM handler\n(chaos "stop" triggers this drain)
+    recycling --> idle: agent wipes workspace\n(heartbeat loop — agent-driven)
+    draining --> terminated: worker stopped
+    terminating --> terminated: worker stopped
+    idle --> terminated: write_off\n(instance gone / stale heartbeat)
+    booting --> terminated: write_off
+    leased --> dead: provider reports the instance gone
+    terminated --> [*]: swept after sweep_after_seconds
+</pre>
+    </div>
+    <p class="diagram-caption">Every transition is a conditional write on one DynamoDB row, so two managers racing one VM cannot both win a lease. The reconciler runs launch, write-off, orphan-release, and scale edges on a schedule; the agent runs boot, wipe, and drain; the manager runs acquire and release.</p>
+    <div class="corrections">
+      <div class="fixnote">
+        <span class="tag">Corrected</span>
+        <b>Eight states, not six-plus-a-write-off.</b> <code>booting, idle, leased, recycling, draining, terminating, dead, terminated</code>. <code>write_off()</code> writes <code>terminated</code> directly (guarded so it can't fire twice) — there's no separate "write-off" state, and <code>dead</code> is its own provider-reported terminal, distinct from a normal <code>terminated</code>.
+        <span class="cite">sandbox/registry/schema.py:18–27 · registry/client.py:429–460</span>
+      </div>
+      <div class="fixnote">
+        <span class="tag">Corrected</span>
+        <b><code>recycling → idle</code> is the agent's call, not the manager's.</b> The heartbeat loop wipes the workspace and flips the row with a conditional <code>expect="recycling"</code> update — the manager is never involved in that edge.
+        <span class="cite">sandbox/vm_agent/heartbeat.py:45–57</span>
+      </div>
+      <div class="fixnote">
+        <span class="tag">Corrected</span>
+        <b><code>draining</code> comes from the agent's own shutdown handler</b>, not from anything chaos-specific — <code>make chaos-stop</code> just sends the SIGTERM that trips it.
+        <span class="cite">sandbox/vm_agent/runtime.py:108–111 · manager/chaos.py:3–4</span>
+      </div>
+      <div class="fixnote">
+        <span class="tag">Corrected</span>
+        <b>"Swept after 600s" is the local/demo profile only.</b> <code>Tunables</code> sets 600s for local, 3600s for prod, and 2s for test.
+        <span class="cite">sandbox/manager/reconciler.py:65,69,73</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">What the demo proves, and where</p>
+    <ul class="proves">
+      <li><span class="n">01</span><span><b>Leases outlive workers.</b> Kill the orchestrator mid-turn — <code>exec_wait</code> is retried and reattaches to the job record on the VM's disk. No rerun.</span></li>
+      <li><span class="n">02</span><span><b>A dead VM is a retry, not a failure.</b> <code>make chaos-kill</code> on the leased VM; the session finishes on a second VM with two lease attempts and the same turn count.</span></li>
+      <li><span class="n">03</span><span><b>The fleet heals itself.</b> The reconciler tops up to the floor from nothing, writes off dead VMs, releases orphaned leases, scales out under pending demand, scales in after a cooldown.</span></li>
+      <li><span class="n">04</span><span><b>Everything is watchable.</b> The dashboard on <code>:8600</code> joins the registry, provider, Temporal, and S3 into one page with a live event feed; the Temporal UI on <code>:8233</code> shows every activity on its queue.</span></li>
+    </ul>
+    <div class="fixnote">
+      <span class="tag">Corrected</span>
+      The run-it-yourself target is <code>make reconcile</code> (which invokes <code>sandbox.manager.reconcile_once</code>) — there is no target literally named <code>reconcile-once</code>.
+      <span class="cite">Makefile:83–84</span>
+    </div>
+  </section>
+
+  <footer>
+    queue names, ports, the reconciler interval, the workflow roster, and the lease-safety claims (①,②,③ above) all checked out against the source unchanged from the original diagram.
+  </footer>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    securityLevel: "loose",
+    theme: "base",
+    themeVariables: {
+      darkMode: false,
+      background: "#FBFAF6",
+      mainBkg: "#F1EEE3",
+      primaryColor: "#F1EEE3",
+      primaryTextColor: "#1A1D1E",
+      primaryBorderColor: "#8A8578",
+      secondaryColor: "#EDEAE0",
+      secondaryTextColor: "#1A1D1E",
+      secondaryBorderColor: "#8A8578",
+      tertiaryColor: "#EDEAE0",
+      tertiaryTextColor: "#1A1D1E",
+      tertiaryBorderColor: "#8A8578",
+      lineColor: "#6B675A",
+      textColor: "#1A1D1E",
+      nodeTextColor: "#1A1D1E",
+      nodeBorder: "#8A8578",
+      clusterBkg: "#F6F4EC",
+      clusterBorder: "#C9C4AF",
+      titleColor: "#1A1D1E",
+      edgeLabelBackground: "#FBFAF6",
+      labelTextColor: "#1A1D1E",
+      labelBoxBkgColor: "#EDEAE0",
+      labelBoxBorderColor: "#8A8578",
+      loopTextColor: "#1A1D1E",
+      noteBkgColor: "#E8E2C9",
+      noteBorderColor: "#C9BE86",
+      noteTextColor: "#1A1D1E",
+      actorBkg: "#F1EEE3",
+      actorBorder: "#8A8578",
+      actorTextColor: "#1A1D1E",
+      actorLineColor: "#8A8578",
+      signalColor: "#5B5748",
+      signalTextColor: "#1A1D1E",
+      activationBkgColor: "#EDEAE0",
+      activationBorderColor: "#8A8578",
+      sequenceNumberColor: "#1A1D1E",
+      altSectionBkgColor: "#F6F4EC",
+      fontFamily: "IBM Plex Mono, monospace",
+      fontSize: "13px"
+    }
+  });
+</script>
+</body>
+</html>
