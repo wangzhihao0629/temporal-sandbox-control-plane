@@ -6,7 +6,9 @@ Why: a failing test is the normal case in a coding session, not an error, so
 these never raise on findings. Exit codes other than "ran, found things" mean
 the tool itself broke, and that is reported as ok=False. The child environment
 drops PYTEST_* and PYTHONPATH so the workspace's tools see a clean interpreter
-even when this runs under pytest or under the artifact launcher.
+even when this runs under pytest or under the artifact launcher, and disables
+bytecode caching so an edit between two runs in the same workspace can't be
+shadowed by a stale __pycache__ entry.
 Production: identical; the real harness reads the same envelopes.
 """
 
@@ -32,6 +34,9 @@ from sandbox.runner.envelopes import (
 def child_env() -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("PYTEST")}
     env.pop("PYTHONPATH", None)
+    # Back-to-back turns edit and re-run the same workspace fast enough that a
+    # stale __pycache__ entry can outlive the source edit that invalidates it.
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
 
 
