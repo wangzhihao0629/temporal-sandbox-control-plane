@@ -1,7 +1,8 @@
-# Sandbox Control Plane
+# Temporal Sandbox Control Plane
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)
+![Temporal](https://img.shields.io/badge/orchestration-Temporal-000000.svg)
 ![macOS Apple Silicon](https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-lightgrey.svg)
 
 An educational, fully local demo of splitting a coding agent's workflow from

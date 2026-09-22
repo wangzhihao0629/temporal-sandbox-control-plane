@@ -1,5 +1,5 @@
 [project]
-name = "sandbox-control-plane"
+name = "temporal-sandbox-control-plane"
 version = "0.1.0"
 description = "Educational demo: Temporal orchestration split from the VMs coding agents run on"
 requires-python = ">=3.12"
