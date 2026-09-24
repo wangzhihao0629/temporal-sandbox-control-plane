@@ -37,6 +37,7 @@ from sandbox.contract.errors import (
     NoCapacity,
     SandboxUnavailable,
 )
+from sandbox.contract.exec_policy import DEMO_POLICY, ExecPolicy
 from sandbox.contract.types import (
     ArtifactRef,
     ArtifactRequest,
@@ -67,10 +68,12 @@ class Lease:
         lease: SandboxLease,
         timeouts: Timeouts,
         workspace_root: str = names.WORKSPACE_ROOT,
+        exec_policy: ExecPolicy = DEMO_POLICY,
     ) -> None:
         self.lease = lease
         self.t = timeouts
         self.workspace_root = workspace_root
+        self.exec_policy = exec_policy
         self.lost = False
 
     @staticmethod
@@ -116,6 +119,9 @@ class Lease:
             raise mapped from e
 
     async def exec_start(self, spec: ExecSpec) -> ExecJob:
+        # Checked here too, not just in the VM agent: a violation should fail
+        # before a round trip to the VM, not after one.
+        self.exec_policy.check(spec.argv)
         return await self._call(
             names.EXEC_START, spec, start_to_close=self.t.short, result_type=ExecJob
         )
@@ -179,9 +185,11 @@ class Sandbox:
         self,
         timeouts: Timeouts | None = None,
         workspace_root: str = names.WORKSPACE_ROOT,
+        exec_policy: ExecPolicy = DEMO_POLICY,
     ) -> None:
         self.t = timeouts or Timeouts.local()
         self.workspace_root = workspace_root
+        self.exec_policy = exec_policy
 
     async def acquire(self, spec: SandboxSpec) -> Lease:
         deadline = workflow.now() + self.t.acquire_wait
@@ -199,7 +207,7 @@ class Sandbox:
                     ),
                     result_type=SandboxLease,
                 )
-                return Lease(lease, self.t, self.workspace_root)
+                return Lease(lease, self.t, self.workspace_root, self.exec_policy)
             except ActivityError as e:
                 mapped = translate(e, vm_call=False)
                 if isinstance(mapped, NoCapacity):

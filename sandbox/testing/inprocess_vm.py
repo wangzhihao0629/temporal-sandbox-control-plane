@@ -1,7 +1,10 @@
 """An in-process VM: the real AgentRuntime over temp directories.
 
 What: a VM agent that runs in the test process, with jobs run as the current
-user, no sudo, and a secrets directory holding dummy values.
+user, no sudo, a secrets directory holding dummy values, and no exec policy
+enforced by default — the same "skip the boundary" choice `run_as_user=None`
+already makes, since most callers exercise generic exec plumbing (heartbeat,
+cancel, drain) with throwaway commands, not a real workflow's argv.
 Why: the reconciler's FakeProvider and the integration tests both need a VM
 that boots in milliseconds and dies on command; keeping one implementation in
 the package means the provider used in tests is the real `AgentRuntime`, not a
@@ -14,6 +17,7 @@ Production: not deployed. The VM image runs `sandbox.vm_agent.worker` instead.
 import uuid
 from pathlib import Path
 
+from sandbox.contract.exec_policy import ALLOW_ALL, ExecPolicy
 from sandbox.timeutil import now_iso
 from sandbox.vm_agent.config import AgentConfig
 from sandbox.vm_agent.runtime import AgentRuntime
@@ -29,6 +33,7 @@ class InProcessVm:
         vm_id: str | None = None,
         pool="demo",
         workspace_root: Path | None = None,
+        exec_policy: ExecPolicy = ALLOW_ALL,
     ):
         self.vm_id = vm_id or f"sbx-{uuid.uuid4().hex[:8]}"
         base = tmp_path / self.vm_id
@@ -52,6 +57,7 @@ class InProcessVm:
             run_as_user=None,
             heartbeat_seconds=0.5,
             graceful_shutdown_seconds=0.0,
+            exec_policy=exec_policy,
         )
         self.runtime = AgentRuntime(self.cfg, client, registry, store)
 

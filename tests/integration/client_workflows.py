@@ -6,6 +6,7 @@ from temporalio import workflow
 
 from sandbox.client import Sandbox, Timeouts
 from sandbox.contract.errors import ExecFailed, LeaseLost, SandboxUnavailable
+from sandbox.contract.exec_policy import ALLOW_ALL
 from sandbox.contract.names import WORKSPACE_ROOT
 from sandbox.contract.types import ExecSpec, SandboxSpec
 
@@ -31,7 +32,10 @@ class ExerciseResult:
 class ExerciseWorkflow:
     @workflow.run
     async def run(self, p: ExerciseParams) -> ExerciseResult:
-        sandbox = Sandbox(Timeouts.test(), workspace_root=p.workspace_root)
+        # This workflow exercises the client's retry/translate/latch mechanics
+        # with throwaway shell commands, not a real workflow's argv, so it
+        # deliberately opts out of the exec policy rather than growing it.
+        sandbox = Sandbox(Timeouts.test(), workspace_root=p.workspace_root, exec_policy=ALLOW_ALL)
         spec = SandboxSpec(
             pool=p.pool, request_id=str(workflow.uuid4()), hold_seconds=p.hold_seconds
         )

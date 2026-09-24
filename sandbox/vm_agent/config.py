@@ -12,7 +12,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from sandbox.contract.names import WORKSPACE_ROOT
+from sandbox.contract.exec_policy import DEMO_POLICY, ExecPolicy
+from sandbox.contract.names import ARTIFACTS_ROOT, WORKSPACE_ROOT
 
 
 def _parse_labels(raw: str) -> dict[str, str]:
@@ -50,6 +51,7 @@ class AgentConfig:
     graceful_shutdown_seconds: float = 30.0
     labels: dict[str, str] = field(default_factory=dict)
     prefetch: list[tuple[str, str]] = field(default_factory=list)
+    exec_policy: ExecPolicy = DEMO_POLICY
 
     @classmethod
     def from_env(cls, env=os.environ) -> "AgentConfig":
@@ -62,9 +64,7 @@ class AgentConfig:
             temporal_namespace=env.get("TEMPORAL_NAMESPACE", "default"),
             agent_version=env.get("AGENT_VERSION", "dev"),
             jobs_dir=Path(env.get("SANDBOX_JOBS_DIR", "/var/lib/sandbox/jobs")),
-            artifacts_dir=Path(
-                env.get("SANDBOX_ARTIFACTS_DIR", "/var/lib/sandbox/artifacts")
-            ),
+            artifacts_dir=Path(env.get("SANDBOX_ARTIFACTS_DIR", ARTIFACTS_ROOT)),
             workspace_root=Path(env.get("SANDBOX_WORKSPACE_ROOT", WORKSPACE_ROOT)),
             secrets_dir=Path(env.get("SANDBOX_SECRETS_DIR", "/etc/sandbox/secrets")),
             run_as_user=env.get("SANDBOX_RUN_AS_USER") or None,

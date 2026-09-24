@@ -6,9 +6,14 @@ from temporalio import workflow
 from sandbox.client import Timeouts
 from sandbox.client.sandbox import VM_NON_RETRYABLE, Lease
 from sandbox.contract.errors import HOST_DRAINING, INCOMPATIBLE, LEASE_LOST, LeaseLost
+from sandbox.contract.exec_policy import ExecPolicy, ExecRule
 from sandbox.contract.types import ExecJob, ExecSpec, SandboxLease
 
 SPEC = ExecSpec(job_id="j1", argv=["true"], cwd="/private/tmp/sandbox/wf")
+
+# This file is about the lost latch and the retry policy, not the exec policy,
+# so SPEC's argv is left simple and every argv is let through here.
+_ALLOW_ALL = ExecPolicy(rules=(ExecRule("allow-all", lambda argv: True),))
 
 
 def _lease() -> Lease:
@@ -22,6 +27,7 @@ def _lease() -> Lease:
             expires_at="2026-01-01T00:00:00Z",
         ),
         Timeouts.test(),
+        exec_policy=_ALLOW_ALL,
     )
 
 

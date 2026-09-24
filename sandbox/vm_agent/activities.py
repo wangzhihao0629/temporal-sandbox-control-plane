@@ -44,6 +44,7 @@ from sandbox.vm_agent.drain import DrainState
 from sandbox.vm_agent.jobs import JobStore
 from sandbox.vm_agent.validation import (
     resolve_secrets,
+    validate_argv,
     validate_cwd,
     validate_env,
     validate_path_under,
@@ -211,6 +212,7 @@ class VmActivities:
 
     @activity.defn(name=names.EXEC_START)
     async def exec_start(self, spec: ExecSpec) -> ExecJob:
+        validate_argv(spec.argv, self.cfg.exec_policy)
         cwd = validate_cwd(spec.cwd, self.cfg.workspace_root)
         env = self._job_env(spec)
         if not self.jobs.exists(spec.job_id):

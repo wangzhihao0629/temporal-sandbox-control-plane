@@ -9,14 +9,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Two users. sandbox-agent runs the worker and owns the state directories.
-# agent runs jobs and owns the workspace. The single sudo rule is the privilege
-# boundary: the worker may become agent, agent can never become the worker.
+# agent runs jobs and owns the workspace. The sudo rule is the privilege
+# boundary: the worker may become agent, agent can never become the worker —
+# and only to run what sandbox.contract.exec_policy.DEMO_POLICY already
+# allows at the Python layer: a bin/runner step, or one of SmokeWorkflow's/
+# HoldWorkflow's fixed ops commands. The two lists must be kept in agreement
+# by hand, since sudoers cannot import Python. This is the backstop, not the
+# primary check: sudoers' glob can't require the digest segment to actually be
+# 64 hex characters the way DEMO_POLICY's regex does, so it is intentionally
+# looser here — argv is expected to already be clean by the time it reaches
+# sudo.
 RUN groupadd --system agent \
  && useradd --system --create-home --gid agent --shell /bin/bash agent \
  && groupadd --system sandbox-agent \
  && useradd --system --create-home --gid sandbox-agent --groups agent --shell /bin/bash sandbox-agent \
- && echo 'sandbox-agent ALL=(agent) NOPASSWD: ALL' > /etc/sudoers.d/sandbox-agent \
- && chmod 0440 /etc/sudoers.d/sandbox-agent
+ && printf '%s\n' \
+      'Cmnd_Alias SANDBOX_RUNNER = /bin/sh /var/lib/sandbox/artifacts/*/bin/runner *' \
+      'Cmnd_Alias SANDBOX_OPS = /usr/bin/uname -a, /usr/bin/id, /usr/bin/sleep *' \
+      'sandbox-agent ALL=(agent) NOPASSWD: SANDBOX_RUNNER, SANDBOX_OPS' \
+      > /etc/sudoers.d/sandbox-agent \
+ && chmod 0440 /etc/sudoers.d/sandbox-agent \
+ && visudo -c -f /etc/sudoers.d/sandbox-agent
 
 # /var/lib/sandbox is traversable so agent can read extracted artifacts, but
 # the job records under jobs/ are the worker's alone. The workspace is setgid

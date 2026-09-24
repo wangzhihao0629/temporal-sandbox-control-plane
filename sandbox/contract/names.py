@@ -14,6 +14,7 @@ MANAGER_TASK_QUEUE = "sandbox-manager-queue"
 ORCHESTRATOR_TASK_QUEUE = "orchestrator-queue"
 VM_TASK_QUEUE_PREFIX = "sandbox-vm-"
 WORKSPACE_ROOT = "/private/tmp/sandbox"
+ARTIFACTS_ROOT = "/var/lib/sandbox/artifacts"
 
 
 def vm_task_queue(vm_id: str) -> str:

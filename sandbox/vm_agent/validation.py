@@ -1,12 +1,13 @@
 """Input validation at the VM boundary.
 
 What: the checks `exec_start`, `put_file`, and `get_file` run on caller input.
-Why: the VM does not trust the orchestrator with paths or credentials. Paths
-must stay under the workspace root, credential-shaped environment keys are
-refused so secrets cannot leak through the non-secret channel, keys that steer
-a loader or a shell before the job's own code runs are refused because this
-environment is handed to a privileged wrapper, and secrets are resolved from
-names to files the worker user owns.
+Why: the VM does not trust the orchestrator with paths, argv, or credentials.
+Paths must stay under the workspace root, argv must match the exec policy so
+a workflow cannot ask this VM to run anything else, credential-shaped
+environment keys are refused so secrets cannot leak through the non-secret
+channel, keys that steer a loader or a shell before the job's own code runs
+are refused because this environment is handed to a privileged wrapper, and
+secrets are resolved from names to files the worker user owns.
 Production: identical.
 """
 
@@ -14,6 +15,7 @@ import re
 from pathlib import Path
 
 from sandbox.contract.errors import Incompatible
+from sandbox.contract.exec_policy import ExecPolicy
 
 # `LD_`/`DYLD_` preload and library paths execute attacker code inside whatever
 # the wrapper runs, sudo included; `BASH_ENV`/`ENV` are sourced by a
@@ -42,6 +44,11 @@ def validate_path_under(path: str, root: Path) -> Path:
 
 def validate_cwd(cwd: str, root: Path) -> Path:
     return validate_path_under(cwd, root)
+
+
+def validate_argv(argv: list[str], policy: ExecPolicy) -> list[str]:
+    policy.check(argv)
+    return argv
 
 
 def validate_env(env: dict[str, str]) -> dict[str, str]:
