@@ -44,6 +44,10 @@ show:
 image:
 	./scripts/build-image.sh
 
+.PHONY: check-sudoers
+check-sudoers:
+	./scripts/check-sudoers.sh
+
 .PHONY: artifact
 
 artifact:

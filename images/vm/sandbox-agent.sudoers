@@ -1,0 +1,39 @@
+# The privilege boundary: the worker (sandbox-agent) may become `agent`, and only
+# to run the commands below. Everything else is refused, with no password prompt
+# to fall back on. Two lists, because they answer different questions:
+#
+# SANDBOX_JOBS is what a workflow may ask a VM to run. It mirrors
+# sandbox.contract.exec_policy.DEMO_POLICY, which checks the same shapes in
+# Python on both sides of the wire; the two must be kept in agreement by hand,
+# since sudoers cannot import Python.
+#
+# SANDBOX_HOUSEKEEPING is what the VM agent itself runs through sudo, never
+# caller-supplied: the job directory (activities.py), cancelling and checking a
+# job's process group (jobs.py), and wiping the workspace on recycle (wipe.py).
+# Adding a sudo call to the agent means adding its exact shape here;
+# `make check-sudoers` runs both lists against the built image.
+#
+# This is the backstop, not the primary check: a sudoers glob cannot require the
+# artifact directory to be 64 hex characters the way DEMO_POLICY's regex does, and
+# `*` also matches `/` and `..`, so the path globs below are intentionally looser
+# than the Python layer. argv is expected to be clean by the time it reaches sudo.
+
+Cmnd_Alias SANDBOX_JOBS = \
+    /bin/sh /var/lib/sandbox/artifacts/*/bin/runner *, \
+    /usr/bin/uname -a, \
+    /usr/bin/id, \
+    /usr/bin/sleep *
+
+Cmnd_Alias SANDBOX_HOUSEKEEPING = \
+    /usr/bin/mkdir -p /private/tmp/sandbox/*, \
+    /usr/bin/kill -[A-Z]* -- -[0-9]*, \
+    /usr/bin/pgrep -g [0-9]*, \
+    /usr/bin/pkill -KILL -u agent, \
+    /usr/bin/find /private/tmp/sandbox -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+
+# SETENV is what lets the agent hand a job its environment (`--preserve-env`,
+# see JobStore._wrap); without it sudo refuses any command that isn't `ALL`. It is
+# scoped to the job commands, because housekeeping never passes an environment.
+# What a caller may put in that environment is vetted before it gets here
+# (sandbox.vm_agent.validation.validate_env refuses LD_*, DYLD_*, BASH_ENV, ENV).
+sandbox-agent ALL=(agent) NOPASSWD: SETENV: SANDBOX_JOBS, NOSETENV: SANDBOX_HOUSEKEEPING

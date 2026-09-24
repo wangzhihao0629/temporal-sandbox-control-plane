@@ -30,8 +30,8 @@ heartbeat loop.
 
 `images/vm/Dockerfile` creates two users: `agent`, owner of the workspace
 `/private/tmp/sandbox`, and `sandbox-agent`, owner of `/var/lib/sandbox` and
-`/etc/sandbox/secrets`, which runs the Temporal worker. One sudoers line is
-the whole boundary: `sandbox-agent ALL=(agent) NOPASSWD: ALL`.
+`/etc/sandbox/secrets`, which runs the Temporal worker. One sudoers file,
+`images/vm/sandbox-agent.sudoers`, is the whole boundary: an allowlist, not `ALL`.
 
 The boundary holds in the other direction too. `/var/lib/sandbox` is mode
 `0755`, traversable so `agent` can read extracted artifacts, but
