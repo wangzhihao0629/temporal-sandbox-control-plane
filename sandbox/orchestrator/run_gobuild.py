@@ -72,6 +72,9 @@ async def main(argv=None) -> int:
     print(f"ran:     {r.output}")
     print(f"snap:    {r.snapshot_uri}  ({r.snapshot_files} files, {r.snapshot_bytes} bytes)")
     print(f"restore: {r.restore_vm}")
+    if r.lost_vms:
+        print(f"lost:    {', '.join(r.lost_vms)}  (build attempts {r.build_attempts}, "
+              f"restore attempts {r.restore_attempts})")
     print(f"ran:     {r.restored_output}")
     same = r.output == r.restored_output
     print(f"match:   {'yes' if same else 'NO'}")

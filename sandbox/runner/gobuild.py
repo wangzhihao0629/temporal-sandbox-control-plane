@@ -16,6 +16,7 @@ Production: the real agent makes the edits; fetch/build/run keep their shape.
 """
 
 import os
+import shutil
 import subprocess
 import time
 from dataclasses import dataclass
@@ -35,6 +36,19 @@ from sandbox.runner.gitutil import git
 REPO_DIR = "repo"
 BINARY = "bin/app"
 GIT_TIMEOUT_SECONDS = 300
+FETCH_ATTEMPTS = 3
+FETCH_BACKOFF_SECONDS = 2.0
+# git's wording for failures a retry can fix. Anything else — a missing
+# repository, a bad ref, a refused URL — fails on the first attempt.
+TRANSIENT_GIT_ERRORS = (
+    "Could not resolve host",
+    "Failed to connect",
+    "Connection timed out",
+    "Operation timed out",
+    "Connection reset",
+    "early EOF",
+    "The requested URL returned error: 5",
+)
 
 
 @dataclass(frozen=True)
@@ -67,24 +81,39 @@ def fetch(workspace: Path, url: str, ref: str) -> FetchEnvelope:
     if dest.exists():
         raise FileExistsError(f"{dest} already exists")
     Path(workspace).mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(
-        [
-            "git",
-            "-c", "protocol.allow=never",
-            "-c", "protocol.https.allow=always",
-            "clone", "--quiet", "--no-checkout", url, str(dest),
-        ],
-        cwd=str(workspace),
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-        capture_output=True,
-        text=True,
-        timeout=GIT_TIMEOUT_SECONDS,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"git clone {url} failed ({proc.returncode}): {proc.stderr.strip()}")
+    _clone(url, dest, Path(workspace))
     git("checkout", "--quiet", "--detach", ref, cwd=dest)
     head = git("rev-parse", "HEAD", cwd=dest)
     return FetchEnvelope(ok=True, url=url, ref=ref, head=head)
+
+
+def _clone(url: str, dest: Path, cwd: Path, sleep=time.sleep) -> None:
+    """Clone, retrying the failures a flaky network causes and nothing else."""
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        proc = subprocess.run(
+            [
+                "git",
+                "-c", "protocol.allow=never",
+                "-c", "protocol.https.allow=always",
+                "clone", "--quiet", "--no-checkout", url, str(dest),
+            ],
+            cwd=str(cwd),
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_SECONDS,
+        )
+        if proc.returncode == 0:
+            return
+        error = proc.stderr.strip()
+        transient = any(marker in error for marker in TRANSIENT_GIT_ERRORS)
+        if not transient or attempt == FETCH_ATTEMPTS:
+            raise RuntimeError(
+                f"git clone {url} failed ({proc.returncode}) after {attempt} attempt(s): {error}"
+            )
+        print(f"[fetch] attempt {attempt} failed, retrying: {error}", flush=True)
+        shutil.rmtree(dest, ignore_errors=True)
+        sleep(FETCH_BACKOFF_SECONDS * attempt)
 
 
 def edit(workspace: Path, name: str) -> EditEnvelope:

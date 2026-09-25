@@ -39,6 +39,35 @@ The four new step names are added to `RUNNER_STEPS` in
 sudoers rule changes: `git` and `go` run inside the runner, so the only argv
 that crosses the boundary is still `/bin/sh .../bin/runner <step>`.
 
+## When a VM dies
+
+The two phases retry separately, each up to `max_lease_attempts` leases, and
+each attempt works in a directory of its own so it never finds a half-finished
+clone from the one before. Losing the build VM before the snapshot exists
+starts the build over on a fresh VM: nothing from it survived. Losing the
+restore VM repeats only the restore, on another VM, because the snapshot is
+already in the object store — the point of taking one. Losing the build VM
+after its snapshot changes nothing, since nothing calls it again. Running out
+of attempts fails with `LeaseAttemptsExhausted` naming the VMs lost, never a
+bare `LeaseLost`. `fetch` also retries git's own network failures (a DNS
+miss, a reset connection) twice with backoff, and fails at once on anything
+permanent, such as a repository that does not exist.
+
+`tests/integration/test_gobuild.py` covers each case on in-process VMs:
+crashing the build VM mid-build, a dead VM handed to the restore phase, and
+running out of restore attempts.
+
+Running those tests repeatedly on a busy laptop found a platform bug, not a
+demo one: a heartbeat that arrived late cancelled `exec_wait`, and the agent
+killed the job, so the retry reattached to a job that was already dead. A
+heartbeat timeout and a workflow cancel both reached the VM as the same
+`not_found`, which is why the agent could not tell them apart. The client now
+waits for `exec_wait`'s cancellation to complete
+(`WAIT_CANCELLATION_COMPLETED`), so a real cancel arrives as
+`cancel_requested` and kills the job, while a missed heartbeat leaves it running
+for the retry. `test_a_missed_heartbeat_leaves_the_job_running_for_the_retry` in
+`tests/integration/test_vm_agent.py` reproduces it deterministically.
+
 ## Snapshots
 
 `snapshot` and `restore` are the two newest `VM_OPERATIONS`
@@ -96,7 +125,8 @@ any name through the allowed resolver, a slow but real exfiltration channel.
 ## Read the code
 
 - `sandbox/orchestrator/gobuild_workflow.py` — the demo, two leases, one
-  snapshot.
+  snapshot, and the per-phase retries.
+- `tests/integration/test_gobuild.py` — the failure cases, one test each.
 - `sandbox/runner/gobuild.py` — `fetch`, `edit`, `build`, `run`, `GO_EDITS`.
 - `sandbox/vm_agent/snapshots.py` — `snapshot`, `restore`.
 - `sandbox/contract/network_policy.py` — `NetworkPolicy`,

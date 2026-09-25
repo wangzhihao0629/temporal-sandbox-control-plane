@@ -79,3 +79,44 @@ def test_every_new_step_has_an_envelope_kind():
     for kind in ("fetch", "edit", "build", "run"):
         assert kind in envelopes.KINDS
         assert envelopes.broken(kind, "boom").kind == kind
+
+
+class _FakeGit:
+    """Stands in for subprocess.run on `git clone`: fails with the given stderr
+    lines in turn, then succeeds."""
+
+    def __init__(self, failures):
+        self.failures = list(failures)
+        self.calls = 0
+
+    def __call__(self, argv, **kwargs):
+        import subprocess
+
+        self.calls += 1
+        if self.failures:
+            return subprocess.CompletedProcess(argv, 128, "", self.failures.pop(0))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+
+def test_fetch_retries_a_transient_network_failure_then_succeeds(tmp_path, monkeypatch):
+    fake = _FakeGit(["fatal: unable to access: Could not resolve host: github.com"])
+    monkeypatch.setattr(gobuild.subprocess, "run", fake)
+    slept = []
+    gobuild._clone("https://github.com/x/y", tmp_path / "repo", tmp_path, sleep=slept.append)
+    assert fake.calls == 2 and slept == [gobuild.FETCH_BACKOFF_SECONDS]
+
+
+def test_fetch_gives_up_after_the_last_attempt(tmp_path, monkeypatch):
+    fake = _FakeGit(["fatal: Connection reset by peer"] * gobuild.FETCH_ATTEMPTS)
+    monkeypatch.setattr(gobuild.subprocess, "run", fake)
+    with pytest.raises(RuntimeError, match=f"after {gobuild.FETCH_ATTEMPTS} attempt"):
+        gobuild._clone("https://github.com/x/y", tmp_path / "repo", tmp_path, sleep=lambda s: None)
+    assert fake.calls == gobuild.FETCH_ATTEMPTS
+
+
+def test_fetch_does_not_retry_a_permanent_failure(tmp_path, monkeypatch):
+    fake = _FakeGit(["remote: Repository not found.\nfatal: repository not found"])
+    monkeypatch.setattr(gobuild.subprocess, "run", fake)
+    with pytest.raises(RuntimeError, match="after 1 attempt"):
+        gobuild._clone("https://github.com/x/y", tmp_path / "repo", tmp_path, sleep=lambda s: None)
+    assert fake.calls == 1
