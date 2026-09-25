@@ -1,10 +1,12 @@
 """Integration fixtures: a real Temporal dev server, moto-backed registry and
 object store, and in-process VMs."""
 
+import contextlib
 import shutil
 import socket
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 import boto3
@@ -77,6 +79,10 @@ def aws_server(monkeypatch):
                 if time.time() > deadline:
                     raise
                 time.sleep(0.1)
+        # moto keeps its data process-wide, not per server, so without this every
+        # test would see the registry rows and objects earlier tests left behind.
+        reset = urllib.request.Request(f"{endpoint}/moto-api/reset", method="POST")
+        urllib.request.urlopen(reset, timeout=10).close()
         resource = boto3.resource("dynamodb", endpoint_url=endpoint, region_name="us-east-1")
         create_tables(resource)
         store = ObjectStore(endpoint_url=endpoint)
@@ -120,3 +126,33 @@ def session_params(session_id, runner_artifact, seed_root, workspace_root, **ove
         runner_env={"RUNNER_PYTHON": sys.executable, "SEED_REPOS_DIR": str(seed_root)},
     )
     return CodingSessionParams(**{**defaults, **overrides})
+
+
+@contextlib.asynccontextmanager
+async def orchestration_workers(env, registry, store, workflows):
+    """The manager's and the orchestrator's workers, as the real deployment runs
+    them, with the given workflows registered on the orchestrator's queue."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from temporalio.worker import Worker
+
+    from sandbox.contract.names import MANAGER_TASK_QUEUE, ORCHESTRATOR_TASK_QUEUE
+    from sandbox.manager.activities import ManagerActivities
+    from sandbox.orchestrator.activities import OrchestratorActivities
+    from sandbox.testing.stubs import StubProvider
+
+    async with (
+        Worker(
+            env.client,
+            task_queue=MANAGER_TASK_QUEUE,
+            activities=ManagerActivities(registry, StubProvider()).all(),
+            activity_executor=ThreadPoolExecutor(4),
+        ),
+        Worker(
+            env.client,
+            task_queue=ORCHESTRATOR_TASK_QUEUE,
+            workflows=workflows,
+            activities=OrchestratorActivities(store).all(),
+        ),
+    ):
+        yield

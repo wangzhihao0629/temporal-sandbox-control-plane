@@ -2,7 +2,7 @@
 
 After this chapter you can list the eleven operations a workflow may perform on a
 VM, name the dataclass each one carries, explain why `acquire` never blocks and
-`release` never gives up, and read the six error types a caller can catch
+`release` never gives up, and read the seven error types a caller can catch
 without knowing Temporal's own failure types.
 
 ## Principles
@@ -119,10 +119,10 @@ outcome with an error raised while cleaning up." See
 
 ## Errors from the caller's seat
 
-`sandbox/contract/errors.py` defines six `SandboxError` subclasses, each an
+`sandbox/contract/errors.py` defines seven `SandboxError` subclasses, each an
 `ApplicationError` with a stable `type` string so it survives serialization:
 `NoCapacity`, `LeaseLost`, `Incompatible`, `SandboxUnavailable`,
-`HostDraining`, `ExecFailed`. `translate.py` is the one function mapping a
+`HostDraining`, `ExecFailed`, `LeaseAttemptsExhausted`. `translate.py` is the one function mapping a
 Temporal `ActivityError` to one of these, or `None` to re-raise the original: a
 timeout on a VM call typed schedule-to-start, heartbeat, start-to-close, or
 schedule-to-close becomes `LeaseLost`; an `ApplicationError` typed `LeaseLost`
@@ -169,7 +169,7 @@ until release.
 - `sandbox/contract/names.py` — `activity_name`, `vm_task_queue`, the eleven
   operation constants, `VM_OPERATIONS`.
 - `sandbox/contract/types.py` — every dataclass this chapter's table lists.
-- `sandbox/contract/errors.py` — the six error types, `SandboxError`.
+- `sandbox/contract/errors.py` — the seven error types, `SandboxError`.
 - `sandbox/client/sandbox.py` — `Sandbox.acquire`, `.release`, `.lease()`,
   `Lease`'s methods, `VM_NON_RETRYABLE`.
 - `sandbox/client/timeouts.py` — `Timeouts.local`, `.prod`, `.test`.

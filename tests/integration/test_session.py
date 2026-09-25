@@ -4,20 +4,15 @@ max_turns exhaustion, and resuming from the bundle after the VM dies mid-turn.""
 
 import asyncio
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from temporalio.worker import Worker
 
-from sandbox.contract.names import MANAGER_TASK_QUEUE, ORCHESTRATOR_TASK_QUEUE
-from sandbox.manager.activities import ManagerActivities
-from sandbox.orchestrator.activities import OrchestratorActivities
+from sandbox.contract.names import ORCHESTRATOR_TASK_QUEUE
 from sandbox.orchestrator.steps import SessionUris
 from sandbox.orchestrator.workflows import CodingSessionDemoWorkflow
 from sandbox.runner.cli import main
 from sandbox.testing.inprocess_vm import InProcessVm
-from sandbox.testing.stubs import StubProvider
-from tests.integration.conftest import session_params
+from tests.integration.conftest import orchestration_workers, session_params
 
 
 def _seed_session(store, sid, seed_root, tmp_path, scenario, turns):
@@ -71,20 +66,7 @@ def _seed_session(store, sid, seed_root, tmp_path, scenario, turns):
 @pytest.fixture
 async def session_workers(env, aws_server):
     registry, store = aws_server
-    async with (
-        Worker(
-            env.client,
-            task_queue=MANAGER_TASK_QUEUE,
-            activities=ManagerActivities(registry, StubProvider()).all(),
-            activity_executor=ThreadPoolExecutor(4),
-        ),
-        Worker(
-            env.client,
-            task_queue=ORCHESTRATOR_TASK_QUEUE,
-            workflows=[CodingSessionDemoWorkflow],
-            activities=OrchestratorActivities(store).all(),
-        ),
-    ):
+    async with orchestration_workers(env, registry, store, [CodingSessionDemoWorkflow]):
         yield
 
 

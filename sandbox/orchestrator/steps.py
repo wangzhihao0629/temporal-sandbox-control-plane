@@ -100,10 +100,14 @@ class StepContext:
     env: dict[str, str] = field(default_factory=dict)
     step_timeout_seconds: int = STEP_TIMEOUT_SECONDS
     turn_timeout_seconds: int = TURN_TIMEOUT_SECONDS
+    # Names a stage of a workflow that runs the same step more than once, so its
+    # job ids and envelopes cannot collide with another stage's.
+    phase: str = ""
 
 
 def job_id(ctx: StepContext, step: str, turn: int) -> str:
-    return f"{ctx.session_id}-{step}-t{turn}-a{ctx.attempt}"
+    phase = f"{ctx.phase}-" if ctx.phase else ""
+    return f"{ctx.session_id}-{phase}{step}-t{turn}-a{ctx.attempt}"
 
 
 def _spec(

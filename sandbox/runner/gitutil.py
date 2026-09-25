@@ -23,13 +23,14 @@ class GitError(RuntimeError):
     pass
 
 
-def git(*args: str, cwd: Path | str) -> str:
+def git(*args: str, cwd: Path | str, timeout: float | None = None) -> str:
     proc = subprocess.run(
         ["git", *args],
         cwd=str(cwd),
         env={**os.environ, **GIT_IDENTITY},
         capture_output=True,
         text=True,
+        timeout=timeout,
     )
     if proc.returncode != 0:
         raise GitError(f"git {' '.join(args)} failed ({proc.returncode}): {proc.stderr.strip()}")

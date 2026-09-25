@@ -17,13 +17,16 @@ rather than having every caller pass a cwd.
 Production: identical, on the default root.
 """
 
+import asyncio
+import contextlib
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from typing import TypeVar
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError
-from temporalio.workflow import ActivityCancellationType
+from temporalio.exceptions import ActivityError, CancelledError
 
 from sandbox.client.timeouts import Timeouts
 from sandbox.client.translate import translate
@@ -34,6 +37,7 @@ from sandbox.contract.errors import (
     LEASE_LOST,
     NO_CAPACITY,
     ExecFailed,
+    LeaseAttemptsExhausted,
     LeaseLost,
     NoCapacity,
     SandboxUnavailable,
@@ -58,6 +62,8 @@ from sandbox.contract.types import (
     VmInfo,
     WaitRequest,
 )
+
+T = TypeVar("T")
 
 # Retrying any of these on the VM's own queue is retrying against a machine that
 # will not answer differently. `HostDraining` is a per-VM queue's way of saying
@@ -96,7 +102,6 @@ class Lease:
         start_to_close: timedelta,
         heartbeat_timeout: timedelta | None = None,
         result_type=None,
-        cancellation_type: ActivityCancellationType = ActivityCancellationType.TRY_CANCEL,
     ):
         if self.lost:
             raise LeaseLost(f"lease {self.lease.lease_id} on {self.lease.vm_id} was lost")
@@ -114,7 +119,6 @@ class Lease:
                     non_retryable_error_types=list(VM_NON_RETRYABLE),
                 ),
                 result_type=result_type,
-                cancellation_type=cancellation_type,
             )
         except ActivityError as e:
             mapped = translate(e, vm_call=True)
@@ -133,16 +137,25 @@ class Lease:
         )
 
     async def exec_wait(self, job: ExecJob, timeout_seconds: int) -> ExecResult:
-        return await self._call(
-            names.EXEC_WAIT,
-            WaitRequest(job_id=job.job_id),
-            start_to_close=timedelta(seconds=timeout_seconds) + self.t.wait_slack,
-            heartbeat_timeout=self.t.heartbeat,
-            result_type=ExecResult,
-            # So a workflow cancel reaches the VM as an explicit cancel, which is
-            # how the agent tells it apart from a missed heartbeat.
-            cancellation_type=ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
-        )
+        try:
+            return await self._call(
+                names.EXEC_WAIT,
+                WaitRequest(job_id=job.job_id),
+                start_to_close=timedelta(seconds=timeout_seconds) + self.t.wait_slack,
+                heartbeat_timeout=self.t.heartbeat,
+                result_type=ExecResult,
+            )
+        except (asyncio.CancelledError, ActivityError) as e:
+            # A workflow cancel reaches this await as an ActivityError whose cause
+            # is CancelledError (or as asyncio.CancelledError if it lands between
+            # activities). The VM's exec_wait only observes a job and never stops
+            # it on cancellation, since a late heartbeat cancels it too, so
+            # stopping the job is this side's call. Anything else passes through.
+            if isinstance(e, ActivityError) and not isinstance(e.cause, CancelledError):
+                raise
+            with contextlib.suppress(Exception):
+                await self.exec_cancel(job.job_id)
+            raise
 
     async def exec(self, spec: ExecSpec, check: bool = True) -> ExecResult:
         job = await self.exec_start(spec)
@@ -271,3 +284,32 @@ class Sandbox:
             yield lease
         finally:
             await self.release(lease)
+
+    async def with_lease_retries(
+        self,
+        pool: str,
+        body: Callable[[Lease, int], Awaitable[T]],
+        attempts: int,
+        what: str = "the work",
+    ) -> tuple[T, int, list[str]]:
+        """Run `body(vm, attempt)` on a freshly leased VM, leasing another each time
+        one is lost, up to `attempts` leases.
+
+        Returns the body's result, the attempt it succeeded on, and the ids of the
+        VMs lost on the way. Only LeaseLost is retried; everything else propagates.
+        Giving up raises LeaseAttemptsExhausted, never LeaseLost, so one call can
+        nest inside another's body without the outer loop reading the inner one
+        giving up as its own VM dying.
+        """
+        lost: list[str] = []
+        for attempt in range(1, attempts + 1):
+            vm_id = ""
+            try:
+                spec = SandboxSpec(pool=pool, request_id=str(workflow.uuid4()))
+                async with self.lease(spec) as vm:
+                    vm_id = vm.lease.vm_id
+                    return await body(vm, attempt), attempt, lost
+            except LeaseLost:
+                lost.append(vm_id)
+                workflow.logger.warning(f"{what}: lost {vm_id} on attempt {attempt}")
+        raise LeaseAttemptsExhausted(f"gave up on {what} after losing {attempts} VMs: {lost}")

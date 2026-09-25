@@ -41,8 +41,9 @@ that crosses the boundary is still `/bin/sh .../bin/runner <step>`.
 
 ## When a VM dies
 
-The two phases retry separately, each up to `max_lease_attempts` leases, and
-each attempt works in a directory of its own so it never finds a half-finished
+The two phases retry separately through `Sandbox.with_lease_retries`
+(`sandbox/client/sandbox.py`), each up to `max_lease_attempts` leases, and each
+attempt works in a directory of its own so it never finds a half-finished
 clone from the one before. Losing the build VM before the snapshot exists
 starts the build over on a fresh VM: nothing from it survived. Losing the
 restore VM repeats only the restore, on another VM, because the snapshot is
@@ -57,15 +58,14 @@ permanent, such as a repository that does not exist.
 crashing the build VM mid-build, a dead VM handed to the restore phase, and
 running out of restore attempts.
 
-Running those tests repeatedly on a busy laptop found a platform bug, not a
-demo one: a heartbeat that arrived late cancelled `exec_wait`, and the agent
-killed the job, so the retry reattached to a job that was already dead. A
+Running those tests repeatedly found a platform bug: a late heartbeat
+cancelled `exec_wait`, the agent killed the job, and the retry reattached to a
+dead job. A
 heartbeat timeout and a workflow cancel both reached the VM as the same
-`not_found`, which is why the agent could not tell them apart. The client now
-waits for `exec_wait`'s cancellation to complete
-(`WAIT_CANCELLATION_COMPLETED`), so a real cancel arrives as
-`cancel_requested` and kills the job, while a missed heartbeat leaves it running
-for the retry. `test_a_missed_heartbeat_leaves_the_job_running_for_the_retry` in
+`not_found`, which is why the agent could not tell them apart. So the agent no
+longer decides: `exec_wait` only observes a job and never stops it when
+cancelled, and a retry reattaches. When the workflow itself is cancelled, the
+client calls `exec_cancel`, which stops the job and flushes its logs. `test_a_missed_heartbeat_leaves_the_job_running_for_the_retry` in
 `tests/integration/test_vm_agent.py` reproduces it deterministically.
 
 ## Snapshots
@@ -117,10 +117,13 @@ entrypoint exits and the VM never registers, so it never boots open. And
 the worker starts, so not even sudo's setuid step can get it back to undo
 them.
 
-Two gaps are deliberate for a local demo and named in the code. Hosts are
-matched by the addresses they resolved to at boot, so a host that moves
-stops working until the VM is replaced. And a job can still query DNS for
-any name through the allowed resolver, a slow but real exfiltration channel.
+Hosts are matched by the addresses they resolved to at boot, and the same
+addresses are pinned in the VM's `/etc/hosts` (`pin_hosts`). Without the pin,
+a job resolving `github.com` minutes later got a newer address the rules did
+not allow — the demo's own chaos drill found that. Two gaps remain, deliberate
+for a local demo and named in the code: a pinned address the host retires
+stops working until the VM is replaced, and a job can still query DNS for any
+name through the allowed resolver, a slow but real exfiltration channel.
 
 ## Read the code
 
@@ -160,8 +163,8 @@ match:   yes
 `make gobuild ARGS=-r` passes `-r` through to the program, and both VMs
 printed `olleH, xobdnas laropmeT!`. Pointing the demo at a host outside the
 allowlist fails in `fetch` with git's own "unable to access" error.
-`make check-network` runs eleven checks on a real VM: `agent` reaches
-`github.com` over HTTPS and resolves names, and is refused `example.com`,
+`make check-network` runs twelve checks on a real VM: `agent` reaches
+`github.com` over HTTPS at its pinned address and resolves names, and is refused `example.com`,
 `1.1.1.1`, `github.com` on port 80, and the host's ssh; root and the worker
 still reach `example.com`; and neither `agent` nor a root process without
 `NET_ADMIN` can change the rules.

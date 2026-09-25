@@ -25,15 +25,14 @@ class NetworkPolicy:
     allow_ports: tuple[int, ...] = (443,)
 
     @classmethod
-    def from_env(cls, env=os.environ, default: "NetworkPolicy | None" = None) -> "NetworkPolicy":
-        """`SANDBOX_EGRESS_ALLOW_HOSTS=a.com,b.com` replaces the default host list;
+    def from_env(cls, env=os.environ) -> "NetworkPolicy":
+        """`SANDBOX_EGRESS_ALLOW_HOSTS=a.com,b.com` replaces the demo's host list;
         set but empty, it allows no hosts at all."""
-        base = default or DEMO_NETWORK_POLICY
         raw = env.get("SANDBOX_EGRESS_ALLOW_HOSTS")
         if raw is None:
-            return base
+            return DEMO_NETWORK_POLICY
         hosts = tuple(h.strip() for h in raw.split(",") if h.strip())
-        return NetworkPolicy(allow_hosts=hosts, allow_ports=base.allow_ports)
+        return cls(allow_hosts=hosts, allow_ports=DEMO_NETWORK_POLICY.allow_ports)
 
 
-DEMO_NETWORK_POLICY = NetworkPolicy(allow_hosts=("github.com",), allow_ports=(443,))
+DEMO_NETWORK_POLICY = NetworkPolicy(allow_hosts=("github.com",))

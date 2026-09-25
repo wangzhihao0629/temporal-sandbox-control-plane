@@ -17,6 +17,11 @@ class LaunchSpec:
     image: str
     cpus: int = 2
     memory: str = "2048M"
+    # Linux capabilities the image's entrypoint needs, without the CAP_ prefix.
+    # NET_ADMIN: it installs the job user's egress rules as root, then drops the
+    # capability for good; without it the VM refuses to boot. Each provider maps
+    # these onto its own mechanism.
+    capabilities: tuple[str, ...] = ("NET_ADMIN",)
 
 
 @dataclass(frozen=True)

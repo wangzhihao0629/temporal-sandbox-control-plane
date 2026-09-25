@@ -11,31 +11,29 @@ import shutil
 import socket
 import sys
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from temporalio.client import WorkflowFailureError
-from temporalio.worker import Worker
 
-from sandbox.contract.names import MANAGER_TASK_QUEUE, ORCHESTRATOR_TASK_QUEUE
-from sandbox.manager.activities import ManagerActivities
-from sandbox.orchestrator.activities import OrchestratorActivities
-from sandbox.orchestrator.gobuild_workflow import GAVE_UP, GoBuildDemoWorkflow, GoBuildParams
+from sandbox.contract.errors import LEASE_ATTEMPTS_EXHAUSTED
+from sandbox.contract.names import ORCHESTRATOR_TASK_QUEUE
+from sandbox.orchestrator.gobuild_workflow import GoBuildDemoWorkflow, GoBuildParams
 from sandbox.testing.inprocess_vm import InProcessVm
-from sandbox.testing.stubs import StubProvider
+from tests.integration.conftest import orchestration_workers
 
 
 def _github_reachable(attempts: int = 3) -> bool:
     # One dropped probe must not silently skip the whole file, so try a few times.
     for _ in range(attempts):
         try:
-            socket.create_connection(("github.com", 443), timeout=5).close()
+            socket.create_connection(("github.com", 443), timeout=3).close()
             return True
         except OSError:
             continue
     return False
 
 
+# `or` short-circuits: without Go there is no network probe at collection time.
 pytestmark = pytest.mark.skipif(
     shutil.which("go") is None or not _github_reachable(),
     reason="needs a Go toolchain and network access to github.com",
@@ -45,33 +43,12 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 async def workers(env, aws_server):
     registry, store = aws_server
-    async with (
-        Worker(
-            env.client,
-            task_queue=MANAGER_TASK_QUEUE,
-            activities=ManagerActivities(registry, StubProvider()).all(),
-            activity_executor=ThreadPoolExecutor(4),
-        ),
-        Worker(
-            env.client,
-            task_queue=ORCHESTRATOR_TASK_QUEUE,
-            workflows=[GoBuildDemoWorkflow],
-            activities=OrchestratorActivities(store).all(),
-        ),
-    ):
+    async with orchestration_workers(env, registry, store, [GoBuildDemoWorkflow]):
         yield
 
 
-@pytest.fixture
-def pool():
-    # moto keeps its tables for the whole test process, so rows from earlier tests
-    # would otherwise compete for leases. A pool of its own isolates each test.
-    return f"go-{uuid.uuid4().hex[:6]}"
-
-
-async def _start_vms(env, aws_server, tmp_path, pool, names):
-    """Start VMs one after another, so `acquire` (oldest idle first) takes them in order.
-    Returns them keyed by the short name; each VM id is prefixed with the pool."""
+async def _start_vms(env, aws_server, tmp_path, names):
+    """Start VMs one after another, so `acquire` (oldest idle first) takes them in order."""
     registry, store = aws_server
     vms = {}
     for name in names:
@@ -80,8 +57,7 @@ async def _start_vms(env, aws_server, tmp_path, pool, names):
             registry,
             store,
             tmp_path,
-            vm_id=f"{pool}-{name}",
-            pool=pool,
+            vm_id=name,
             workspace_root=tmp_path / "ws",
         ).start()
         await asyncio.sleep(0.05)
@@ -94,11 +70,10 @@ async def _stop(vms, crashed):
             await vm.stop()
 
 
-def _params(runner_artifact, tmp_path, pool, **overrides) -> GoBuildParams:
+def _params(runner_artifact, tmp_path, **overrides) -> GoBuildParams:
     uri, sha = runner_artifact
     return GoBuildParams(
-        session_id=f"{pool}-s",
-        pool=pool,
+        session_id=f"go-{uuid.uuid4().hex[:6]}",
         runner_uri=uri,
         runner_sha256=sha,
         profile="test",
@@ -126,11 +101,11 @@ async def _wait_for_job(registry, vm_id, job_id, seconds=60):
 
 
 async def test_clone_edit_build_run_then_restore_on_another_vm(
-    env, aws_server, workers, runner_artifact, tmp_path, pool
+    env, aws_server, workers, runner_artifact, tmp_path
 ):
-    vms = await _start_vms(env, aws_server, tmp_path, pool, ["a", "b"])
+    vms = await _start_vms(env, aws_server, tmp_path, ["a", "b"])
     try:
-        handle = await _start(env, _params(runner_artifact, tmp_path, pool))
+        handle = await _start(env, _params(runner_artifact, tmp_path))
         result = await asyncio.wait_for(handle.result(), timeout=240)
         assert result.output == "Hello, Temporal sandbox!"
         assert result.restored_output == result.output
@@ -142,15 +117,15 @@ async def test_clone_edit_build_run_then_restore_on_another_vm(
 
 
 async def test_losing_the_build_vm_before_the_snapshot_rebuilds_on_a_fresh_vm(
-    env, aws_server, workers, runner_artifact, tmp_path, pool
+    env, aws_server, workers, runner_artifact, tmp_path
 ):
     registry, _ = aws_server
-    vms = await _start_vms(env, aws_server, tmp_path, pool, ["a", "b", "c"])
+    vms = await _start_vms(env, aws_server, tmp_path, ["a", "b", "c"])
     try:
-        params = _params(runner_artifact, tmp_path, pool)
+        params = _params(runner_artifact, tmp_path)
         handle = await _start(env, params)
         # Kill the build VM as soon as its first step exists: well before the snapshot.
-        await _wait_for_job(registry, vms["a"].vm_id, f"{params.session_id}-fetch-t0-a1")
+        await _wait_for_job(registry, vms["a"].vm_id, f"{params.session_id}-build-fetch-t0-a1")
         await vms["a"].runtime.crash()
 
         result = await asyncio.wait_for(handle.result(), timeout=240)
@@ -163,39 +138,39 @@ async def test_losing_the_build_vm_before_the_snapshot_rebuilds_on_a_fresh_vm(
 
 
 async def test_losing_the_restore_vm_restores_elsewhere_without_rebuilding(
-    env, aws_server, workers, runner_artifact, tmp_path, pool
+    env, aws_server, workers, runner_artifact, tmp_path
 ):
     registry, _ = aws_server
-    vms = await _start_vms(env, aws_server, tmp_path, pool, ["a", "b", "c"])
+    vms = await _start_vms(env, aws_server, tmp_path, ["a", "b", "c"])
     # b dies while idle. With no reconciler running its row stays `idle`, so it is
     # the VM the restore phase acquires first, and finds nobody home.
     await vms["b"].runtime.crash()
     try:
-        handle = await _start(env, _params(runner_artifact, tmp_path, pool))
+        handle = await _start(env, _params(runner_artifact, tmp_path))
         result = await asyncio.wait_for(handle.result(), timeout=240)
         assert result.lost_vms == [vms["b"].vm_id]
         assert result.build_attempts == 1 and result.build_vm == vms["a"].vm_id
         assert result.restore_attempts == 2 and result.restore_vm == vms["c"].vm_id
         assert result.restored_output == result.output
         jobs = [r["job_id"] for vm in vms.values() for r in registry.list_jobs(vm.vm_id)]
-        assert sum("-build-" in j for j in jobs) == 1, "the restore retry must not rebuild"
+        assert sum("-build-t0-" in j for j in jobs) == 1, "the restore retry must not rebuild"
     finally:
         await _stop(vms, crashed=("b",))
 
 
 async def test_running_out_of_restore_attempts_fails_with_a_clear_error(
-    env, aws_server, workers, runner_artifact, tmp_path, pool
+    env, aws_server, workers, runner_artifact, tmp_path
 ):
-    vms = await _start_vms(env, aws_server, tmp_path, pool, ["a", "b", "c"])
+    vms = await _start_vms(env, aws_server, tmp_path, ["a", "b", "c"])
     await vms["b"].runtime.crash()
     await vms["c"].runtime.crash()
     try:
-        params = _params(runner_artifact, tmp_path, pool, max_lease_attempts=2)
+        params = _params(runner_artifact, tmp_path, max_lease_attempts=2)
         handle = await _start(env, params)
         with pytest.raises(WorkflowFailureError) as err:
             await asyncio.wait_for(handle.result(), timeout=240)
         cause = err.value.cause
-        assert getattr(cause, "type", None) == GAVE_UP
+        assert getattr(cause, "type", None) == LEASE_ATTEMPTS_EXHAUSTED
         assert "restore" in str(cause)
         assert vms["b"].vm_id in str(cause) and vms["c"].vm_id in str(cause)
     finally:

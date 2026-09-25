@@ -17,6 +17,43 @@ from sandbox.contract.errors import Incompatible
 from sandbox.objectstore import ObjectStore
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def extract_tarball(tarball: Path, dest: Path, dir_bits: int, file_bits: int) -> int:
+    """Unpack a .tar.gz into `dest` and return how many members it held.
+
+    Every member goes through tarfile's `data` filter, which refuses anything
+    that would land outside `dest`. The mode bits are added in the same pass, so
+    there is no second walk over the tree afterwards.
+    """
+    # A set, not a counter: tarfile runs the filter twice on directories, once to
+    # create them and again when it applies their modes at the end.
+    names: set[str] = set()
+
+    def with_bits(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo:
+        member = tarfile.data_filter(member, path)
+        names.add(member.name)
+        # The data filter leaves a directory's mode as None, which tarfile
+        # creates as 0o700; add to that, as the old walk after extraction did.
+        mode = 0o700 if member.mode is None else member.mode
+        if member.isdir():
+            return member.replace(mode=mode | dir_bits, deep=False)
+        if member.isfile():
+            return member.replace(mode=mode | file_bits, deep=False)
+        return member
+
+    with tarfile.open(tarball, "r:gz") as tar:
+        tar.extractall(dest, filter=with_bits)
+    dest.chmod(dest.stat().st_mode | dir_bits)
+    return len(names)
+
+
 class ArtifactCache:
     def __init__(self, root: Path, store: ObjectStore) -> None:
         self.root = Path(root)
@@ -29,19 +66,16 @@ class ArtifactCache:
             return target
         download = self.root / f".dl-{sha256}-{os.getpid()}"
         self.store.download_file(uri, download)
-        digest = hashlib.sha256(download.read_bytes()).hexdigest()
+        digest = sha256_file(download)
         if digest != sha256:
             download.unlink()
             raise Incompatible(f"artifact {uri} digest {digest} does not match {sha256}")
         staging = self.root / f".tmp-{sha256}-{os.getpid()}"
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir(parents=True)
-        with tarfile.open(download, "r:gz") as tar:
-            tar.extractall(staging, filter="data")
+        # Readable (and traversable) by everyone: the job user runs what is in here.
+        extract_tarball(download, staging, dir_bits=0o055, file_bits=0o044)
         download.unlink()
-        for path in [staging, *staging.rglob("*")]:
-            mode = path.stat().st_mode
-            path.chmod(mode | 0o055 if path.is_dir() else mode | 0o044)
         try:
             staging.rename(target)
         except OSError:

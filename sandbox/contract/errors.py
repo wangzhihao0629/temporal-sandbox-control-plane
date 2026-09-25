@@ -18,6 +18,7 @@ INCOMPATIBLE = "Incompatible"
 EXEC_FAILED = "ExecFailed"
 HOST_DRAINING = "HostDraining"
 SANDBOX_UNAVAILABLE = "SandboxUnavailable"
+LEASE_ATTEMPTS_EXHAUSTED = "LeaseAttemptsExhausted"
 
 
 class SandboxError(ApplicationError):
@@ -53,6 +54,13 @@ class Incompatible(SandboxError):
 
 class SandboxUnavailable(SandboxError):
     TYPE = SANDBOX_UNAVAILABLE
+
+
+class LeaseAttemptsExhausted(SandboxError):
+    """Every lease a retry loop tried was lost. Deliberately not a LeaseLost, so an
+    outer retry loop never mistakes an inner loop giving up for its own VM dying."""
+
+    TYPE = LEASE_ATTEMPTS_EXHAUSTED
 
 
 class HostDraining(SandboxError):

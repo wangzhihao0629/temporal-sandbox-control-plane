@@ -14,7 +14,6 @@ Production: identical; a large workspace would stream multipart instead of
 building the tarball in a temp file.
 """
 
-import hashlib
 import os
 import shutil
 import tarfile
@@ -24,24 +23,9 @@ from pathlib import Path
 from sandbox.contract.errors import Incompatible
 from sandbox.contract.types import SnapshotRef
 from sandbox.objectstore import ObjectStore
+from sandbox.vm_agent.artifacts import extract_tarball, sha256_file
 
 MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _make_group_writable(root: Path) -> None:
-    for path in [root, *root.rglob("*")]:
-        if path.is_symlink():
-            continue
-        mode = path.stat().st_mode
-        path.chmod(mode | (0o2070 if path.is_dir() else 0o060))
 
 
 def snapshot(store: ObjectStore, path: Path, dst_uri: str) -> SnapshotRef:
@@ -62,7 +46,7 @@ def snapshot(store: ObjectStore, path: Path, dst_uri: str) -> SnapshotRef:
             raise Incompatible(
                 f"snapshot of {path} is {size} bytes; the cap is {MAX_SNAPSHOT_BYTES}"
             )
-        sha256 = _sha256(tarball)
+        sha256 = sha256_file(tarball)
         store.upload_file(tarball, dst_uri)
     return SnapshotRef(uri=dst_uri, sha256=sha256, size=size, files=files, path=str(path))
 
@@ -87,15 +71,13 @@ def restore(store: ObjectStore, src_uri: str, sha256: str, path: Path) -> Snapsh
     with tempfile.TemporaryDirectory() as tmp:
         tarball = Path(tmp) / "snapshot.tar.gz"
         size = store.download_file(src_uri, tarball)
-        actual = _sha256(tarball)
+        actual = sha256_file(tarball)
         if actual != sha256:
             raise Incompatible(f"snapshot {src_uri} digest {actual} does not match {sha256}")
         staging = parent / f".restore-{path.name}-{os.getpid()}"
         shutil.rmtree(staging, ignore_errors=True)
         staging.mkdir()
-        with tarfile.open(tarball, "r:gz") as tar:
-            members = tar.getmembers()
-            tar.extractall(staging, filter="data")
-        _make_group_writable(staging)
+        # Group-writable (and setgid on directories), so the next job can build here.
+        files = extract_tarball(tarball, staging, dir_bits=0o2070, file_bits=0o060)
         staging.rename(path)
-    return SnapshotRef(uri=src_uri, sha256=sha256, size=size, files=len(members), path=str(path))
+    return SnapshotRef(uri=src_uri, sha256=sha256, size=size, files=files, path=str(path))

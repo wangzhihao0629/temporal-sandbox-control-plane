@@ -31,7 +31,7 @@ from sandbox.runner.envelopes import (
     RunEnvelope,
     truncate,
 )
-from sandbox.runner.gitutil import git
+from sandbox.runner.gitutil import GitError, git
 
 REPO_DIR = "repo"
 BINARY = "bin/app"
@@ -90,27 +90,20 @@ def fetch(workspace: Path, url: str, ref: str) -> FetchEnvelope:
 def _clone(url: str, dest: Path, cwd: Path, sleep=time.sleep) -> None:
     """Clone, retrying the failures a flaky network causes and nothing else."""
     for attempt in range(1, FETCH_ATTEMPTS + 1):
-        proc = subprocess.run(
-            [
-                "git",
+        try:
+            git(
                 "-c", "protocol.allow=never",
                 "-c", "protocol.https.allow=always",
                 "clone", "--quiet", "--no-checkout", url, str(dest),
-            ],
-            cwd=str(cwd),
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-            capture_output=True,
-            text=True,
-            timeout=GIT_TIMEOUT_SECONDS,
-        )
-        if proc.returncode == 0:
+                cwd=cwd,
+                timeout=GIT_TIMEOUT_SECONDS,
+            )
             return
-        error = proc.stderr.strip()
+        except GitError as e:
+            error = str(e)
         transient = any(marker in error for marker in TRANSIENT_GIT_ERRORS)
         if not transient or attempt == FETCH_ATTEMPTS:
-            raise RuntimeError(
-                f"git clone {url} failed ({proc.returncode}) after {attempt} attempt(s): {error}"
-            )
+            raise GitError(f"{error} (after {attempt} attempt(s))")
         print(f"[fetch] attempt {attempt} failed, retrying: {error}", flush=True)
         shutil.rmtree(dest, ignore_errors=True)
         sleep(FETCH_BACKOFF_SECONDS * attempt)
@@ -126,10 +119,15 @@ def edit(workspace: Path, name: str) -> EditEnvelope:
     return EditEnvelope(ok=True, edit=name, file=spec.file, added=stat[0], removed=stat[1])
 
 
-def go_env(workspace: Path) -> dict[str, str]:
-    cache = Path(workspace) / ".cache"
+def go_env(workspace: Path, env=os.environ) -> dict[str, str]:
+    # One cache per VM, at the workspace root the agent passes every job, so a
+    # retried build on the same VM starts warm instead of recompiling the standard
+    # library. Go's cache is content-addressed, so sharing it is safe; the recycle
+    # wipe clears everything under the root, cache included.
+    root = env.get("SANDBOX_WORKSPACE_ROOT") or str(workspace)
+    cache = Path(root) / ".cache"
     return {
-        **os.environ,
+        **env,
         "GOCACHE": str(cache / "go-build"),
         "GOPATH": str(cache / "gopath"),
         "GOTOOLCHAIN": "local",

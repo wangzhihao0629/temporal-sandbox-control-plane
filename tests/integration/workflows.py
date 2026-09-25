@@ -4,17 +4,19 @@ They exist to prove the VM side of the contract on its own. Task 8 adds
 workflows that go through the client.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError, CancelledError
 
 from sandbox.contract import names
 from sandbox.contract.types import (
     ArtifactRef,
     ArtifactRequest,
+    CancelRequest,
     ExecJob,
     ExecResult,
     ExecSpec,
@@ -79,19 +81,32 @@ class RunCommandWorkflow:
             )
             if again != job:
                 raise ApplicationError("exec_start was not idempotent", non_retryable=True)
-        return await workflow.execute_activity(
-            names.EXEC_WAIT,
-            WaitRequest(job_id=job.job_id),
-            task_queue=p.task_queue,
-            schedule_to_start_timeout=timedelta(seconds=10),
-            start_to_close_timeout=timedelta(seconds=p.wait_start_to_close_seconds),
-            heartbeat_timeout=timedelta(seconds=p.wait_heartbeat_seconds),
-            cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
-            retry_policy=RetryPolicy(
-                maximum_attempts=p.wait_max_attempts, initial_interval=timedelta(seconds=1)
-            ),
-            result_type=ExecResult,
-        )
+        try:
+            return await workflow.execute_activity(
+                names.EXEC_WAIT,
+                WaitRequest(job_id=job.job_id),
+                task_queue=p.task_queue,
+                schedule_to_start_timeout=timedelta(seconds=10),
+                start_to_close_timeout=timedelta(seconds=p.wait_start_to_close_seconds),
+                heartbeat_timeout=timedelta(seconds=p.wait_heartbeat_seconds),
+                retry_policy=RetryPolicy(
+                    maximum_attempts=p.wait_max_attempts, initial_interval=timedelta(seconds=1)
+                ),
+                result_type=ExecResult,
+            )
+        except (asyncio.CancelledError, ActivityError) as e:
+            if isinstance(e, ActivityError) and not isinstance(e.cause, CancelledError):
+                raise
+            # As the client does: exec_wait only observes, so stopping the job on
+            # a workflow cancel is an explicit exec_cancel.
+            await workflow.execute_activity(
+                names.EXEC_CANCEL,
+                CancelRequest(job_id=job.job_id, grace_seconds=5),
+                task_queue=p.task_queue,
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=_ONCE,
+            )
+            raise
 
 
 @dataclass

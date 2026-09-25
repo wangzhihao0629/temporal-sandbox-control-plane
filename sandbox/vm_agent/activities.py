@@ -67,24 +67,6 @@ _VM_IDENTITY_KEYS = (
 )
 
 
-def _cancel_was_requested() -> bool:
-    """True when the workflow meant to stop the job, not when the wait timed out.
-
-    A workflow cancel or a workflow reset abandons the job. A heartbeat timeout
-    reaches the activity as `not_found` and must not: the job is fine and the
-    retried wait should find it running. The client waits for exec_wait's
-    cancellation to complete (`WAIT_CANCELLATION_COMPLETED`), which is what makes
-    a workflow cancel arrive as `cancel_requested` rather than as that same
-    `not_found`. A terminated workflow's job is left too; the reconciler releases
-    the orphaned lease and the recycle wipe kills it. With no details to go on,
-    keep the old behaviour and treat it as a cancel.
-    """
-    details = activity.cancellation_details()
-    if details is None:
-        return True
-    return details.cancel_requested or details.reset
-
-
 def _heartbeat_interval(timeout: timedelta | None) -> float:
     """How often exec_wait should beat, given the timeout Temporal will enforce.
 
@@ -309,13 +291,11 @@ class VmActivities:
                     self._stop_and_flush(req.job_id, spec.log_uri, "cancelled", 10)
                 )
                 raise HostDraining() from None
-            if activity.is_worker_shutdown() or not _cancel_was_requested():
-                # Leave the job running; the retried wait will reattach to it. A
-                # missed heartbeat (a busy host, a network blip) cancels this
-                # activity too, and killing a healthy job for it would turn a
-                # retryable hiccup into a failed step.
-                raise
-            await asyncio.shield(self._stop_and_flush(req.job_id, spec.log_uri, "cancelled", 10))
+            # Otherwise only observe: leave the job running. This wait is cancelled
+            # for reasons that say nothing about the job — a worker shutting down,
+            # a heartbeat that arrived late on a busy host — and a retried wait
+            # reattaches to it. Stopping a job is exec_cancel's job, which the
+            # client calls when its workflow is the one being cancelled.
             raise
         await asyncio.to_thread(self._sync_logs, req.job_id, spec.log_uri, True)
         result = self._result(req.job_id, spec)
@@ -333,7 +313,16 @@ class VmActivities:
     @activity.defn(name=names.EXEC_CANCEL)
     async def exec_cancel(self, req: CancelRequest) -> None:
         await self._touch()
-        await asyncio.to_thread(self.jobs.cancel, req.job_id, req.grace_seconds, "cancelled")
+        try:
+            spec = await asyncio.to_thread(self.jobs.load_spec, req.job_id)
+        except FileNotFoundError:
+            await asyncio.to_thread(self.jobs.cancel, req.job_id, req.grace_seconds, "cancelled")
+            return
+        # Shielded: a second cancellation mid-kill must not skip the log flush, or
+        # the tail of the cancelled job is lost.
+        await asyncio.shield(
+            self._stop_and_flush(req.job_id, spec.log_uri, "cancelled", req.grace_seconds)
+        )
 
     @activity.defn(name=names.PUT_FILE)
     async def put_file(self, req: PutFileRequest) -> FileStat:

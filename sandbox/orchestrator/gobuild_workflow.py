@@ -10,25 +10,24 @@ restored on another. Holding the first lease while acquiring the second makes
 the second VM a different machine, not the first one recycled. The restored
 run matching the first run's output is the proof the snapshot carried both the
 edit and the build output.
-Failure: the two phases retry separately, each up to `max_lease_attempts`
-leases. Losing the build VM before the snapshot exists starts the build over on
-a fresh VM, since nothing from it survived. Losing the restore VM only repeats
-the restore on another VM: the snapshot is already in the object store, which
-is the point of having one. Losing the build VM after its snapshot changes
-nothing, because nothing calls it again.
+Failure: the two phases retry separately through `Sandbox.with_lease_retries`,
+each up to `max_lease_attempts` leases. Losing the build VM before the snapshot
+exists starts the build over on a fresh VM, since nothing from it survived.
+Losing the restore VM only repeats the restore on another VM: the snapshot is
+already in the object store, which is the point of having one. Losing the build
+VM after its snapshot changes nothing, because nothing calls it again.
 Production: the same shape, with the real agent making the edit.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 
 from temporalio import workflow
-from temporalio.exceptions import ApplicationError
 
 from sandbox.client import Sandbox, Timeouts
 from sandbox.client.sandbox import Lease
-from sandbox.contract.errors import LeaseLost
 from sandbox.contract.names import WORKSPACE_ROOT
-from sandbox.contract.types import SandboxSpec, SnapshotRef
+from sandbox.contract.types import SnapshotRef
 from sandbox.orchestrator.steps import (
     SessionUris,
     StepContext,
@@ -42,7 +41,6 @@ from sandbox.orchestrator.steps import (
 DEFAULT_REPO_URL = "https://github.com/golang/example"
 # Pinned so the scripted edit always finds its target text.
 DEFAULT_REF = "7f05d217867b2af52b0a28c6d1c91df97e1b5b39"
-GAVE_UP = "LeaseAttemptsExhausted"
 
 
 @dataclass
@@ -54,7 +52,7 @@ class GoBuildParams:
     ref: str = DEFAULT_REF
     edit: str = "greet-sandbox"
     package: str = "hello"
-    run_args: list[str] | None = None
+    run_args: list[str] = field(default_factory=list)
     step_timeout_seconds: int = 600
     max_lease_attempts: int = 3
     pool: str = "demo"
@@ -85,101 +83,72 @@ class GoBuildResult:
 class GoBuildDemoWorkflow:
     @workflow.run
     async def run(self, p: GoBuildParams) -> GoBuildResult:
-        self.p = p
-        self.sandbox = Sandbox(Timeouts.for_profile(p.profile), workspace_root=p.workspace_root)
-        self.uris = SessionUris(p.session_id)
-        self.args = list(p.run_args or [])
-        self.lost: list[str] = []
+        sandbox = Sandbox(Timeouts.for_profile(p.profile), workspace_root=p.workspace_root)
+        uris = SessionUris(p.session_id)
 
-        for attempt in range(1, p.max_lease_attempts + 1):
-            vm_id = ""
-            try:
-                async with self.sandbox.lease(self._request()) as vm:
-                    vm_id = vm.lease.vm_id
-                    built = await self._build(vm, attempt)
-                    # The snapshot exists from here on, so no loss after this line
-                    # sends the workflow back to the build.
-                    restored = await self._restore_elsewhere(built["snapshot"])
-                    return self._result(vm_id, attempt, built, restored)
-            except LeaseLost:
-                self.lost.append(vm_id)
-                workflow.logger.warning(f"build VM {vm_id} lost on attempt {attempt}; rebuilding")
-        raise ApplicationError(
-            f"gave up after losing {p.max_lease_attempts} build VMs: {self.lost}",
-            type=GAVE_UP,
-            non_retryable=True,
+        def context(vm: Lease, runner_path: str, phase: str, attempt: int) -> StepContext:
+            # One directory per phase and attempt, never reused: a retry must not
+            # find a half-finished clone from the attempt before it.
+            return StepContext(
+                runner_path=runner_path,
+                workspace=vm.workspace(f"{phase}-{attempt}"),
+                session_id=p.session_id,
+                attempt=attempt,
+                phase=phase,
+                env=p.runner_env,
+                step_timeout_seconds=p.step_timeout_seconds,
+            )
+
+        async def restore_and_run(
+            vm: Lease, attempt: int, snap: SnapshotRef
+        ) -> tuple[str, str]:
+            # The runner and the snapshot are independent, so both land at once.
+            runner, _ = await asyncio.gather(
+                vm.ensure_artifact(p.runner_uri, p.runner_sha256),
+                vm.restore(snap, f"{vm.workspace(f'restore-{attempt}')}/repo"),
+            )
+            ctx = context(vm, runner.path, "restore", attempt)
+            ran = await run_step(vm, uris, run_spec(ctx, uris, p.run_args))
+            return vm.lease.vm_id, ran["stdout"]
+
+        async def build_then_restore(vm: Lease, attempt: int) -> GoBuildResult:
+            runner = await vm.ensure_artifact(p.runner_uri, p.runner_sha256)
+            ctx = context(vm, runner.path, "build", attempt)
+            fetched = await run_step(vm, uris, fetch_spec(ctx, uris, p.repo_url, p.ref))
+            await run_step(vm, uris, edit_spec(ctx, uris, p.edit))
+            built = await run_step(vm, uris, build_spec(ctx, uris, p.package))
+            first = await run_step(vm, uris, run_spec(ctx, uris, p.run_args))
+            snap = await vm.snapshot(f"{ctx.workspace}/repo", uris.snapshot)
+            # From here the snapshot exists, so losing this VM changes nothing.
+            # The restore VM is leased while this lease is still held, so it is
+            # another machine, not this one recycled.
+            (restore_vm, restored), restore_attempt, restore_lost = (
+                await sandbox.with_lease_retries(
+                    p.pool,
+                    lambda other, n: restore_and_run(other, n, snap),
+                    p.max_lease_attempts,
+                    what="the restore",
+                )
+            )
+            return GoBuildResult(
+                session_id=p.session_id,
+                build_vm=vm.lease.vm_id,
+                restore_vm=restore_vm,
+                head=fetched["head"],
+                go_version=built["go_version"],
+                binary_bytes=int(built["bytes"]),
+                output=first["stdout"],
+                restored_output=restored,
+                snapshot_uri=snap.uri,
+                snapshot_bytes=snap.size,
+                snapshot_files=snap.files,
+                restore_attempts=restore_attempt,
+                lost_vms=restore_lost,
+            )
+
+        result, build_attempt, build_lost = await sandbox.with_lease_retries(
+            p.pool, build_then_restore, p.max_lease_attempts, what="the build"
         )
-
-    def _request(self) -> SandboxSpec:
-        return SandboxSpec(pool=self.p.pool, request_id=str(workflow.uuid4()))
-
-    def _context(self, runner_path: str, workspace: str, attempt: int) -> StepContext:
-        return StepContext(
-            runner_path=runner_path,
-            workspace=workspace,
-            session_id=self.p.session_id,
-            attempt=attempt,
-            env=self.p.runner_env,
-            step_timeout_seconds=self.p.step_timeout_seconds,
-        )
-
-    async def _build(self, vm: Lease, attempt: int) -> dict:
-        p, uris = self.p, self.uris
-        runner = await vm.ensure_artifact(p.runner_uri, p.runner_sha256)
-        # One directory per phase and attempt, never reused: a retry must not find
-        # a half-finished clone from the attempt before it.
-        ctx = self._context(runner.path, vm.workspace(f"build-{attempt}"), attempt)
-        fetched = await run_step(vm, uris, fetch_spec(ctx, uris, p.repo_url, p.ref))
-        await run_step(vm, uris, edit_spec(ctx, uris, p.edit))
-        built = await run_step(vm, uris, build_spec(ctx, uris, p.package))
-        first = await run_step(vm, uris, run_spec(ctx, uris, self.args))
-        snap = await vm.snapshot(f"{ctx.workspace}/repo", uris.snapshot)
-        return {"fetched": fetched, "built": built, "first": first, "snapshot": snap}
-
-    async def _restore_elsewhere(self, snap: SnapshotRef) -> dict:
-        p, uris = self.p, self.uris
-        for attempt in range(1, p.max_lease_attempts + 1):
-            vm_id = ""
-            try:
-                # Acquired while the build lease is still held, so it is another VM.
-                async with self.sandbox.lease(self._request()) as other:
-                    vm_id = other.lease.vm_id
-                    runner = await other.ensure_artifact(p.runner_uri, p.runner_sha256)
-                    # Job ids carry the attempt; restore attempts are numbered after
-                    # every possible build attempt so the two can never collide.
-                    ctx = self._context(
-                        runner.path,
-                        other.workspace(f"restore-{attempt}"),
-                        p.max_lease_attempts + attempt,
-                    )
-                    await other.restore(snap, f"{ctx.workspace}/repo")
-                    second = await run_step(other, uris, run_spec(ctx, uris, self.args))
-                    return {"vm_id": vm_id, "attempt": attempt, "second": second}
-            except LeaseLost:
-                self.lost.append(vm_id)
-                workflow.logger.warning(f"restore VM {vm_id} lost on attempt {attempt}; retrying")
-        # Not LeaseLost: the build phase must not read this as its own VM dying.
-        raise ApplicationError(
-            f"gave up after losing {p.max_lease_attempts} restore VMs: {self.lost}",
-            type=GAVE_UP,
-            non_retryable=True,
-        )
-
-    def _result(self, build_vm: str, attempt: int, built: dict, restored: dict) -> GoBuildResult:
-        snap: SnapshotRef = built["snapshot"]
-        return GoBuildResult(
-            session_id=self.p.session_id,
-            build_vm=build_vm,
-            restore_vm=restored["vm_id"],
-            head=built["fetched"]["head"],
-            go_version=built["built"]["go_version"],
-            binary_bytes=int(built["built"]["bytes"]),
-            output=built["first"]["stdout"],
-            restored_output=restored["second"]["stdout"],
-            snapshot_uri=snap.uri,
-            snapshot_bytes=snap.size,
-            snapshot_files=snap.files,
-            build_attempts=attempt,
-            restore_attempts=restored["attempt"],
-            lost_vms=list(self.lost),
-        )
+        result.build_attempts = build_attempt
+        result.lost_vms = build_lost + result.lost_vms
+        return result

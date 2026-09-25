@@ -5,7 +5,7 @@ import shutil
 
 import pytest
 
-from sandbox.runner import envelopes, gobuild
+from sandbox.runner import envelopes, gitutil, gobuild
 
 
 def test_fetch_accepts_only_https(tmp_path):
@@ -57,10 +57,12 @@ def test_run_before_build_is_a_broken_step(tmp_path):
         gobuild.run(tmp_path, [])
 
 
-def test_go_env_never_downloads(tmp_path):
-    env = gobuild.go_env(tmp_path)
+def test_go_env_never_downloads_and_shares_one_cache_per_vm(tmp_path):
+    workspace = tmp_path / "wf" / "build-1"
+    env = gobuild.go_env(workspace, {"SANDBOX_WORKSPACE_ROOT": str(tmp_path)})
     assert env["GOPROXY"] == "off" and env["GOTOOLCHAIN"] == "local"
-    assert env["GOCACHE"].startswith(str(tmp_path)) and "/repo/" not in env["GOCACHE"]
+    assert env["GOCACHE"] == str(tmp_path / ".cache" / "go-build"), "at the root, not per attempt"
+    assert gobuild.go_env(workspace, {})["GOCACHE"].startswith(str(workspace))
 
 
 @pytest.mark.skipif(shutil.which("go") is None, reason="no Go toolchain on this machine")
@@ -100,7 +102,7 @@ class _FakeGit:
 
 def test_fetch_retries_a_transient_network_failure_then_succeeds(tmp_path, monkeypatch):
     fake = _FakeGit(["fatal: unable to access: Could not resolve host: github.com"])
-    monkeypatch.setattr(gobuild.subprocess, "run", fake)
+    monkeypatch.setattr(gitutil.subprocess, "run", fake)
     slept = []
     gobuild._clone("https://github.com/x/y", tmp_path / "repo", tmp_path, sleep=slept.append)
     assert fake.calls == 2 and slept == [gobuild.FETCH_BACKOFF_SECONDS]
@@ -108,15 +110,15 @@ def test_fetch_retries_a_transient_network_failure_then_succeeds(tmp_path, monke
 
 def test_fetch_gives_up_after_the_last_attempt(tmp_path, monkeypatch):
     fake = _FakeGit(["fatal: Connection reset by peer"] * gobuild.FETCH_ATTEMPTS)
-    monkeypatch.setattr(gobuild.subprocess, "run", fake)
-    with pytest.raises(RuntimeError, match=f"after {gobuild.FETCH_ATTEMPTS} attempt"):
+    monkeypatch.setattr(gitutil.subprocess, "run", fake)
+    with pytest.raises(gitutil.GitError, match=f"after {gobuild.FETCH_ATTEMPTS} attempt"):
         gobuild._clone("https://github.com/x/y", tmp_path / "repo", tmp_path, sleep=lambda s: None)
     assert fake.calls == gobuild.FETCH_ATTEMPTS
 
 
 def test_fetch_does_not_retry_a_permanent_failure(tmp_path, monkeypatch):
     fake = _FakeGit(["remote: Repository not found.\nfatal: repository not found"])
-    monkeypatch.setattr(gobuild.subprocess, "run", fake)
-    with pytest.raises(RuntimeError, match="after 1 attempt"):
+    monkeypatch.setattr(gitutil.subprocess, "run", fake)
+    with pytest.raises(gitutil.GitError, match="after 1 attempt"):
         gobuild._clone("https://github.com/x/y", tmp_path / "repo", tmp_path, sleep=lambda s: None)
     assert fake.calls == 1
