@@ -11,10 +11,12 @@ Why: rules keyed on the socket's uid leave the worker, which runs as
 `sandbox-agent`, untouched, and cover everything a job starts, whatever
 language it is written in. Refusing with `reject` rather than `drop` makes a
 blocked connection fail at once instead of hanging for a timeout.
-Known gaps, both fine for a local demo and both listed in the policy's
-docstring: allowed hosts are matched by the IPs they resolved to at boot, so a
-host that changes address mid-life stops working until the VM is replaced; and
-a job can still make DNS queries for any name through the allowed resolver,
+Allowed hosts are matched by the addresses they resolved to at boot, and those
+same addresses are pinned in /etc/hosts, so a job that resolves the name again
+gets an address the rules allow even after the host's DNS has moved on. Known
+gaps, both fine for a local demo and both listed in the policy's docstring: a
+pinned address that the host retires stops working until the VM is replaced;
+and a job can still make DNS queries for any name through the allowed resolver,
 which is a slow but real exfiltration channel.
 Production: an egress proxy in front of the VM does the hostname allowlist.
 """
@@ -31,6 +33,9 @@ from urllib.parse import urlparse
 from sandbox.contract.network_policy import NetworkPolicy
 
 TABLE = "sandbox_egress"
+HOSTS_FILE = Path("/etc/hosts")
+_HOSTS_BEGIN = "# BEGIN sandbox egress: allowed hosts, pinned at boot"
+_HOSTS_END = "# END sandbox egress"
 
 
 def resolve(hosts: tuple[str, ...]) -> dict[str, list[str]]:
@@ -91,12 +96,12 @@ def render(
         host, port = object_store
         family = "ip" if ipaddress.ip_address(host).version == 4 else "ip6"
         rules.append(f"{family} daddr {host} tcp dport {port} accept")
-    allowed = sorted({a for addrs in resolved.values() for a in addrs})
-    v4, v6 = _split(allowed)
-    ports = _set(policy.allow_ports)
-    for family, addrs in (("ip", v4), ("ip6", v6)):
-        if addrs and policy.allow_ports:
-            rules.append(f"{family} daddr {_set(addrs)} tcp dport {ports} accept")
+    if policy.allow_ports:
+        ports = _set(policy.allow_ports)
+        v4, v6 = _split(sorted({a for addrs in resolved.values() for a in addrs}))
+        for family, addrs in (("ip", v4), ("ip6", v6)):
+            if addrs:
+                rules.append(f"{family} daddr {_set(addrs)} tcp dport {ports} accept")
     rules.append("counter reject")
     body = "\n".join(f"    {r}" for r in rules)
     return (
@@ -111,16 +116,40 @@ def render(
     )
 
 
+def pin_hosts(text: str, resolved: dict[str, list[str]]) -> str:
+    """`text` (an /etc/hosts) with the allowed hosts pinned to the addresses the
+    rules allow, replacing any earlier pinned block.
+
+    The rules match addresses, but a job resolves the name again when it connects,
+    and a host like github.com hands out a different address minutes later. Pinned
+    here, the job resolves to exactly what the rules allow for the VM's lifetime.
+    """
+    kept, inside = [], False
+    for line in text.splitlines():
+        if line == _HOSTS_BEGIN:
+            inside = True
+        elif line == _HOSTS_END:
+            inside = False
+        elif not inside:
+            kept.append(line)
+    block = [_HOSTS_BEGIN]
+    for host, addresses in sorted(resolved.items()):
+        block += [f"{address} {host}" for address in addresses]
+    block.append(_HOSTS_END)
+    return "\n".join(kept + block) + "\n"
+
+
 def main(env=None) -> int:
     env = os.environ if env is None else env
     policy = NetworkPolicy.from_env(env)
     user = env.get("SANDBOX_RUN_AS_USER", "agent")
     uid = pwd.getpwnam(user).pw_uid
     store = env.get("S3_ENDPOINT", "")
+    resolved = resolve(policy.allow_hosts)
     ruleset = render(
         policy,
         uid,
-        resolve(policy.allow_hosts),
+        resolved,
         nameservers(),
         endpoint(store) if store else None,
     )
@@ -129,6 +158,7 @@ def main(env=None) -> int:
         print(f"egress: nft refused the ruleset: {proc.stderr.strip()}", file=sys.stderr)
         print(ruleset, file=sys.stderr)
         return 1
+    HOSTS_FILE.write_text(pin_hosts(HOSTS_FILE.read_text(), resolved))
     print(
         f"egress: {user} (uid {uid}) may reach {', '.join(policy.allow_hosts) or 'no hosts'}"
         f" on {', '.join(map(str, policy.allow_ports))}, plus DNS and the object store",

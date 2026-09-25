@@ -19,6 +19,8 @@ echo "== applying the egress rules (as the entrypoint does)"
 
 echo "== the job user (agent)"
 check "agent -> https://github.com"                 allow as agent curl -sS -o /dev/null --max-time 8 https://github.com
+pinned() { ip=$(runuser -u agent -- getent hosts github.com | awk '{print $1; exit}'); grep -q "^$ip github.com$" /etc/hosts; }
+check "agent resolves github.com to the pinned address" allow pinned
 check "agent can resolve names (DNS)"               allow as agent getent hosts example.com
 check "agent -> https://example.com"                deny  as agent curl -sS -o /dev/null --max-time 8 https://example.com
 check "agent -> http://1.1.1.1"                     deny  as agent curl -sS -o /dev/null --max-time 8 http://1.1.1.1

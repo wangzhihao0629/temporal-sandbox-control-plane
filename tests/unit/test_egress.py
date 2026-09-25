@@ -60,3 +60,15 @@ def test_nameservers_and_endpoint_parsing(tmp_path):
     assert egress.nameservers(conf) == ["192.168.64.1", "8.8.8.8"]
     assert egress.endpoint("http://192.168.64.1:5050") == ("192.168.64.1", 5050)
     assert egress.endpoint("https://10.0.0.5") == ("10.0.0.5", 443)
+
+
+def test_allowed_hosts_are_pinned_in_etc_hosts_replacing_any_earlier_pin():
+    original = "127.0.0.1 localhost\n::1 localhost\n"
+    once = egress.pin_hosts(original, {"github.com": ["140.82.116.3"]})
+    assert once.startswith(original)
+    assert "140.82.116.3 github.com\n" in once
+    # Applying again (a restarted entrypoint) replaces the block, never stacks it.
+    twice = egress.pin_hosts(once, {"github.com": ["140.82.116.4"]})
+    assert "140.82.116.3" not in twice and "140.82.116.4 github.com\n" in twice
+    assert twice.count("BEGIN sandbox egress") == 1
+    assert twice.startswith(original)
