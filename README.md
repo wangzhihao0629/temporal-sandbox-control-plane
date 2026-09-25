@@ -35,9 +35,126 @@ standing in for DynamoDB and S3, Apple `container` VMs, and a live dashboard.
   names (github.com, for the demo) — each checked against a real VM by
   `make check-sudoers` and `make check-network`.
 
-See [`docs/sandbox-control-plane.html`](docs/sandbox-control-plane.html) for
-a full diagram of the components, one coding session traced activity by
-activity, and the VM lifecycle state machine — open it directly in a browser.
+## How it works
+
+### The idea: the workflow is not on the machine
+
+A coding agent needs a machine to run commands on, but a machine can crash,
+be preempted, or run out of disk mid-task. If the agent's *workflow* — its
+plan, its progress, which turn it's on — lived on that machine, it would die
+with it. So they're split:
+
+- **The workflow** runs in [Temporal](https://temporal.io), which records every
+  step it takes. If the process running it dies, another one replays that
+  record and carries on from the same point.
+- **The VM** is a disposable worker. The workflow *leases* one, tells it what
+  to run through a small, versioned set of operations (the *contract*), and
+  hands it back. It never trusts the VM to remember anything that matters:
+  results come back through the object store, and a session's state is saved
+  there after every turn.
+
+Losing a VM therefore costs, at most, the step it was running — never the
+session.
+
+### The pieces
+
+```mermaid
+flowchart TB
+    subgraph host["Host processes (make workers)"]
+        orch["Orchestrator worker<br/>runs the workflows"]
+        mgr["Manager worker<br/>acquire, release, reconciler"]
+        api["Status API + dashboard<br/>:8600"]
+    end
+    subgraph infra["Shared infrastructure"]
+        temporal[("Temporal<br/>:7233")]
+        registry[("Registry<br/>DynamoDB, via moto")]
+        store[("Object store<br/>S3, via moto")]
+    end
+    subgraph vm["Each VM (an Apple container)"]
+        agent["VM agent<br/>polls its own task queue"]
+        job["Job, as user 'agent'<br/>bin/runner steps"]
+    end
+
+    orch -- "workflows and activities" --> temporal
+    mgr -- "acquire / release" --> temporal
+    temporal -- "exec, files, snapshots<br/>on sandbox-vm-{id}" --> agent
+    mgr -- "leases, as conditional writes" --> registry
+    agent -. "register, heartbeat" .-> registry
+    agent -- "sudo, allowlisted commands only" --> job
+    job -- "envelopes, bundles, logs" --> store
+    api --> registry
+    api --> store
+    api --> temporal
+```
+
+Three task queues carry all the traffic: `orchestrator-queue` for the
+workflows, `sandbox-manager-queue` for leasing, and one queue per VM, named
+after it, that only that VM's agent listens on. The only bytes that cross
+between the workflow and a VM are object-store URIs — never file contents or
+logs inside a Temporal payload.
+
+### One job, start to finish
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant W as Workflow
+    participant M as Manager
+    participant V as VM agent
+    participant S as Object store
+
+    W->>M: acquire(pool)
+    M-->>W: lease: vm_id, task queue
+    W->>V: ensure_artifact(runner, sha256)
+    W->>V: exec_start(step)
+    W->>V: exec_wait
+    Note over V: heartbeats while the job runs,<br/>renewing the lease
+    alt the step finishes
+        V->>S: the step writes its result envelope
+        V-->>W: ExecResult (exit code, output tail)
+        W->>S: read the envelope
+    else the VM dies mid-step
+        V--xW: heartbeats stop
+        Note over W: LeaseLost: release, lease another VM,<br/>resume from the state saved in S3
+    end
+    W->>M: release(lease, recycle)
+    Note over V: the agent wipes the workspace<br/>and the VM goes back to idle
+```
+
+A step's *outcome* — tests failing, a non-zero exit — is data the workflow
+reads and reacts to. Only *infrastructure* failure (a VM that stops answering)
+is an error, and the answer to that is always the same: lease another VM.
+
+### A VM's life
+
+```mermaid
+stateDiagram-v2
+    [*] --> booting: reconciler launches one
+    booting --> idle: agent registers
+    idle --> leased: acquire
+    leased --> recycling: release (recycle)
+    recycling --> idle: agent wipes the workspace
+    leased --> terminating: release (destroy)
+    idle --> terminating: scale-in
+    leased --> draining: SIGTERM
+    draining --> terminated: worker stopped
+    terminating --> terminated: instance removed
+    leased --> terminated: write-off (instance gone)
+    idle --> terminated: write-off (instance gone)
+    terminated --> [*]: row swept later
+```
+
+Every arrow is a *conditional write* on the VM's one row in the registry, so
+two managers racing for the same idle VM can't both win it. A **reconciler**
+runs every 15 seconds and does the housekeeping no single workflow owns:
+launching VMs up to the pool's floor, writing off VMs whose instance is gone,
+releasing leases whose workflow has died, and retiring surplus VMs.
+
+### Where to go from here
+
+The [numbered course](#documentation) builds these ideas up one chapter at a
+time. [`docs/sandbox-control-plane.html`](docs/sandbox-control-plane.html) is a
+standalone page with the same diagrams in more detail — open it in a browser.
 
 ## Requirements
 
