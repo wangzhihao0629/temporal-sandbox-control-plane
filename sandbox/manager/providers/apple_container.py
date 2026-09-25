@@ -74,6 +74,10 @@ class AppleContainerProvider:
             str(spec.cpus),
             "--memory",
             spec.memory,
+            # Only the entrypoint uses it, as root, to install the job user's
+            # egress rules; it drops it from the bounding set before the agent starts.
+            "--cap-add",
+            "CAP_NET_ADMIN",
         ]
         for key, value in env.items():
             args += ["--env", f"{key}={value}"]

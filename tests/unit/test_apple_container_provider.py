@@ -94,6 +94,8 @@ def test_launch_builds_the_run_command():
             "2",
             "--memory",
             "2048M",
+            "--cap-add",
+            "CAP_NET_ADMIN",
             "--env",
             "VM_ID=sbx-abc",
             "--env",
