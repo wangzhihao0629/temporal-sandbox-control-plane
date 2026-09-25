@@ -111,8 +111,6 @@ class VmActivities:
             self.restore,
         ]
 
-    # ---- helpers -------------------------------------------------------------
-
     def _job_env(self, spec: ExecSpec) -> dict[str, str]:
         if self.cfg.run_as_user:
             env = {
@@ -190,7 +188,6 @@ class VmActivities:
         return sizes
 
     async def _stop_and_flush(self, job_id: str, log_uri: str, reason: str, grace: float) -> None:
-        """Kill the job, then push whatever it wrote before it died."""
         await asyncio.to_thread(self.jobs.cancel, job_id, grace, reason)
         await asyncio.to_thread(self._sync_logs, job_id, log_uri, True)
 
@@ -212,8 +209,6 @@ class VmActivities:
             log_uri=spec.log_uri,
             duration_seconds=max(0.0, ended - st.started_at),
         )
-
-    # ---- activities ----------------------------------------------------------
 
     @activity.defn(name=names.EXEC_START)
     async def exec_start(self, spec: ExecSpec) -> ExecJob:
@@ -279,8 +274,6 @@ class VmActivities:
                     last_heartbeat = now
                 await asyncio.sleep(_POLL_EVERY)
         except asyncio.CancelledError:
-            # Shielded: a second cancellation while the kill is in flight must
-            # not skip the log flush, or the tail of a cancelled job is lost.
             if self.drain.draining:
                 # A drain stops the worker, so the cancellation usually arrives
                 # before the loop's own drain check fires. The orchestrator has

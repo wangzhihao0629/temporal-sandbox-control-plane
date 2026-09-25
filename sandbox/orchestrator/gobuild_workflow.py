@@ -102,7 +102,6 @@ class GoBuildDemoWorkflow:
         async def restore_and_run(
             vm: Lease, attempt: int, snap: SnapshotRef
         ) -> tuple[str, str]:
-            # The runner and the snapshot are independent, so both land at once.
             runner, _ = await asyncio.gather(
                 vm.ensure_artifact(p.runner_uri, p.runner_sha256),
                 vm.restore(snap, f"{vm.workspace(f'restore-{attempt}')}/repo"),

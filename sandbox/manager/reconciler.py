@@ -88,8 +88,6 @@ class Reconciler:
         self.clock = clock
         self._launcher = launcher or self._launch
 
-    # ---- snapshot ------------------------------------------------------------------
-
     def inventory(self, pool: str) -> Inventory:
         policy = self.registry.get_policy(pool)
         if policy is None:
@@ -116,8 +114,6 @@ class Reconciler:
     @staticmethod
     def _ref(row: dict) -> str:
         return row.get("provider_ref", row["vm_id"])
-
-    # ---- step 1: health -------------------------------------------------------------
 
     def health(self, inv: Inventory) -> list[Action]:
         actions: list[Action] = []
@@ -194,8 +190,6 @@ class Reconciler:
                 self._write_off(vm_id, "stale heartbeat", "write_off_stale", actions)
         return actions
 
-    # ---- step 2: leases -------------------------------------------------------------
-
     def leases(self, inv: Inventory, owner_status: OwnerStatus) -> list[Action]:
         actions: list[Action] = []
         for row in inv.rows:
@@ -224,8 +218,6 @@ class Reconciler:
                 )
                 actions.append(Action("orphan", row["vm_id"], detail))
         return actions
-
-    # ---- step 3: capacity -----------------------------------------------------------
 
     def capacity(self, inv: Inventory) -> list[Action]:
         actions: list[Action] = []
@@ -296,8 +288,6 @@ class Reconciler:
                     )
         return actions
 
-    # ---- step 4: requests -----------------------------------------------------------
-
     def requests(self, inv: Inventory) -> list[Action]:
         actions: list[Action] = []
         for req in inv.pending:
@@ -313,8 +303,6 @@ class Reconciler:
                     )
                     actions.append(Action("abandon", "", detail))
         return actions
-
-    # ---- step 5: sample -------------------------------------------------------------
 
     def sample(self, pool: str) -> dict[str, int]:
         inv = self.inventory(pool)
@@ -346,8 +334,6 @@ class Reconciler:
         )
         return counts
 
-    # ---- the whole pass -------------------------------------------------------------
-
     def run(self, pool: str, owner_status: OwnerStatus) -> ReconcileReport:
         """One pass in process: the exact equivalent of one `ReconcileWorkflow` run.
 
@@ -362,8 +348,6 @@ class Reconciler:
         actions += self.capacity(inv)
         actions += self.requests(inv)
         return ReconcileReport(pool, self.sample(pool), actions)
-
-    # ---- helpers ----------------------------------------------------------------------
 
     def _terminate(self, ref: str) -> None:
         try:

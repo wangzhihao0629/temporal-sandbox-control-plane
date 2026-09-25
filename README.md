@@ -229,21 +229,50 @@ make lint   # ruff
 These run against the pure/unit and moto-backed integration suites — no VM
 or Temporal server required.
 
-## Project layout
+## Code map
 
+Every component is one package under `sandbox/`, about 5,900 lines of code in
+all (not counting comments and docstrings). Nearly every module opens with a short
+*What / Why / Production* docstring saying what it does, why it is shaped that
+way, and what would change in production.
+
+| Package | What it is | Lines | Start reading at |
+|---|---|---:|---|
+| `sandbox/contract/` | The versioned wire contract: types, activity names, errors, the exec and network policies | 240 | `sandbox/contract/types.py` |
+| `sandbox/client/` | What a workflow calls: `Sandbox.lease`, `Lease.exec`, `with_lease_retries` | 310 | `sandbox/client/sandbox.py` |
+| `sandbox/registry/` | The DynamoDB tables: VM rows, leases, jobs, events | 610 | `claim_idle` in `sandbox/registry/client.py` |
+| `sandbox/manager/` | Acquire and release, the reconciler, chaos tooling, the CLIs | 810 | `sandbox/manager/reconciler.py` |
+| `sandbox/manager/providers/` | Where VMs come from: Apple `container`, and an in-process fake | 180 | `sandbox/manager/providers/base.py` |
+| `sandbox/vm_agent/` | What runs inside a VM: jobs, heartbeat, drain, snapshots, egress rules | 1,160 | `sandbox/vm_agent/activities.py` |
+| `sandbox/orchestrator/` | The demo workflows and the CLIs that start them | 810 | `sandbox/orchestrator/workflows.py` |
+| `sandbox/runner/` | The program a job runs on the VM, including the fake coding agent | 1,000 | `sandbox/runner/cli.py` |
+| `sandbox/status/` | The read API and dashboard | 530 | `sandbox/status/api.py` |
+| `sandbox/testing/` | An in-process VM for tests | 75 | `sandbox/testing/inprocess_vm.py` |
+
+Outside `sandbox/`: `images/vm/` is the VM image (Dockerfile, entrypoint,
+sudoers rule, seed repository), `scripts/` brings the stack up and down and
+probes the image, `tests/` holds the unit and integration suites, and `docs/`
+holds the course.
+
+Two pieces of code carry most of the idea. A workflow uses a VM like this —
+lease one, run commands through the contract, and the lease is released
+however the block exits (`SmokeWorkflow`, in `sandbox/orchestrator/workflows.py`):
+
+```python
+async with sandbox.lease(spec) as vm:
+    info = await vm.describe()
+    uname = await vm.exec(
+        ExecSpec(job_id=vm.new_job_id(), argv=["uname", "-a"], cwd=vm.workspace(), timeout_seconds=30)
+    )
 ```
-sandbox/         the system itself
-  contract/      the versioned wire contract (types, activity names, errors)
-  registry/      the DynamoDB-backed VM/lease/job registry
-  manager/       acquire/release activities, the reconciler, chaos tooling
-  vm_agent/      what runs inside a VM: boot, exec, heartbeat, drain
-  orchestrator/  the demo workflows and the fake coding agent
-  client/        the workflow-facing sandbox client
-  status/        the read API and dashboard behind it
-images/vm/       the VM image: Dockerfile, entrypoint, seed repository
-scripts/         bring-up/tear-down and image-build scripts
-tests/           unit, integration, and status-API test suites
-docs/            the numbered course and the architecture diagram
+
+And one condition is what makes a lease exclusive: `claim_idle` in
+`sandbox/registry/client.py` flips a VM from idle to leased only if it is still
+idle and unleased at the moment of the write, so two managers racing for the
+same VM cannot both win it:
+
+```python
+ConditionExpression="#s = :idle AND attribute_not_exists(lease_id)",
 ```
 
 ## License

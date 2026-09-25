@@ -104,8 +104,6 @@ class JobStore:
         self.run_as_user = run_as_user
         self._procs: dict[str, subprocess.Popen] = {}
 
-    # ---- paths ---------------------------------------------------------------
-
     def job_dir(self, job_id: str) -> Path:
         return self.root / _safe(job_id)
 
@@ -141,8 +139,6 @@ class JobStore:
         if meta is None:
             raise KeyError(job_id)
         return int(meta["pgid"])
-
-    # ---- lifecycle -----------------------------------------------------------
 
     def start(self, spec: ExecSpec, env: dict[str, str]) -> ExecJob:
         d = self.job_dir(spec.job_id)
@@ -363,8 +359,6 @@ class JobStore:
             # The wrapper died with the group and never recorded an exit code.
             (d / "exit.tmp").write_text("-1")
             os.replace(d / "exit.tmp", d / "exit")
-
-    # ---- output --------------------------------------------------------------
 
     def read_tail(self, job_id: str, stream: str, max_bytes: int = 8192) -> str:
         path = self.log_path(job_id, stream)

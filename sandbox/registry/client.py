@@ -131,8 +131,6 @@ class Registry:
     def from_env(cls) -> "Registry":
         return cls(cls.resource_from_env())
 
-    # ---- VM rows -----------------------------------------------------------
-
     def register_vm(self, vm_id, pool, provider_ref, agent_version, contract_majors, labels=None):
         """Record a booting VM. Never disturbs a live lease.
 
@@ -390,8 +388,6 @@ class Registry:
             if not _is_condition_failure(e):
                 raise
 
-    # ---- pool policy ------------------------------------------------------------
-
     @staticmethod
     def policy_key(pool: str) -> str:
         return f"{POOL_ITEM_PREFIX}{pool}"
@@ -423,8 +419,6 @@ class Registry:
             ExpressionAttributeValues={":p": POOL_ITEM_PREFIX},
         )
         return sorted((_clean(r) for r in rows), key=lambda r: r["pool"])
-
-    # ---- write-off ---------------------------------------------------------------
 
     def write_off(self, vm_id, reason) -> bool:
         """Declare a VM gone: terminated, unleased, unprotected, with a TTL.
@@ -462,8 +456,6 @@ class Registry:
                 return False
             raise
 
-    # ---- jobs ---------------------------------------------------------------
-
     def put_job(self, vm_id, job_id, **fields):
         item = {"vm_id": vm_id, "job_id": job_id, "updated_at": now_iso(), **_to_dynamo(fields)}
         self.jobs.put_item(Item=item)
@@ -495,8 +487,6 @@ class Registry:
             (_clean(i) for i in items), key=lambda r: r.get("updated_at", ""), reverse=True
         )
         return rows[:limit]
-
-    # ---- events -------------------------------------------------------------
 
     def emit(self, type, actor, message, vm_id="", details=None):
         ts = now_iso()
@@ -536,8 +526,6 @@ class Registry:
             rows.extend(self._events_on(yesterday, limit - len(rows)))
         return [_clean(i) for i in rows]
 
-    # ---- fleet samples -------------------------------------------------------------
-
     def latest_fleet_sample(self):
         # Looks back at most 200 events, so a very busy feed can push the last
         # sample out of the window; treat None as "not in the recent window",
@@ -546,8 +534,6 @@ class Registry:
             if event.get("type") == "fleet_sample":
                 return event
         return None
-
-    # ---- acquire requests -----------------------------------------------------
 
     def record_pending(self, request_id, pool, workflow_id):
         """Record an unfulfilled acquire, keeping the age of the first attempt.
