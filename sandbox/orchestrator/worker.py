@@ -17,9 +17,10 @@ from sandbox import envfile
 from sandbox.contract.names import ORCHESTRATOR_TASK_QUEUE
 from sandbox.objectstore import ObjectStore
 from sandbox.orchestrator.activities import OrchestratorActivities
+from sandbox.orchestrator.gobuild_workflow import GoBuildDemoWorkflow
 from sandbox.orchestrator.workflows import CodingSessionDemoWorkflow, HoldWorkflow, SmokeWorkflow
 
-WORKFLOWS = [SmokeWorkflow, HoldWorkflow, CodingSessionDemoWorkflow]
+WORKFLOWS = [SmokeWorkflow, HoldWorkflow, CodingSessionDemoWorkflow, GoBuildDemoWorkflow]
 
 
 async def main() -> None:

@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 MAX_FAILURES = 20
 MAX_FINDINGS = 50
 MAX_MESSAGE = 500
-KINDS = ("clone", "turn", "lint", "test", "export")
+KINDS = ("clone", "turn", "lint", "test", "export", "fetch", "edit", "build", "run")
 
 
 def truncate(text: str, limit: int = MAX_MESSAGE) -> str:
@@ -94,12 +94,59 @@ class ExportEnvelope(_Envelope):
     kind: str = "export"
 
 
+@dataclass(frozen=True)
+class FetchEnvelope(_Envelope):
+    ok: bool
+    url: str = ""
+    ref: str = ""
+    head: str = ""
+    error: str = ""
+    kind: str = "fetch"
+
+
+@dataclass(frozen=True)
+class EditEnvelope(_Envelope):
+    ok: bool
+    edit: str = ""
+    file: str = ""
+    added: int = 0
+    removed: int = 0
+    already_applied: bool = False
+    error: str = ""
+    kind: str = "edit"
+
+
+@dataclass(frozen=True)
+class BuildEnvelope(_Envelope):
+    ok: bool
+    binary: str = ""
+    bytes: int = 0
+    go_version: str = ""
+    seconds: float = 0.0
+    error: str = ""
+    kind: str = "build"
+
+
+@dataclass(frozen=True)
+class RunEnvelope(_Envelope):
+    ok: bool
+    exit_code: int = 0
+    stdout: str = ""
+    stderr: str = ""
+    error: str = ""
+    kind: str = "run"
+
+
 _BY_KIND = {
     "clone": CloneEnvelope,
     "turn": TurnEnvelope,
     "lint": LintEnvelope,
     "test": TestEnvelope,
     "export": ExportEnvelope,
+    "fetch": FetchEnvelope,
+    "edit": EditEnvelope,
+    "build": BuildEnvelope,
+    "run": RunEnvelope,
 }
 
 

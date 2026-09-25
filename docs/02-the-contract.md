@@ -1,6 +1,6 @@
 # 02 · The contract: what a workflow may ask a VM
 
-After this chapter you can list the nine operations a workflow may perform on a
+After this chapter you can list the eleven operations a workflow may perform on a
 VM, name the dataclass each one carries, explain why `acquire` never blocks and
 `release` never gives up, and read the six error types a caller can catch
 without knowing Temporal's own failure types.
@@ -17,12 +17,10 @@ Spec §5.1 states five principles the code holds to:
 - **Payload limits.** Files and logs never cross as bytes; they move as object
   store URIs, and results carry a tail plus a pointer, not the output.
 - **Determinism.** Every id a caller needs — a `request_id`, a `job_id` — is
-  created deterministically in workflow code — `workflow.uuid4()` here, a
-  composed string in [chapter 06](06-orchestrator-and-fake-agent.md) — so a
-  retried activity retries against the same key. `sandbox/contract/types.py`
-  keeps the module JSON-native — plain `str`, `int`, `float`, `bool`, `list`,
-  and `dict` fields round-trip through Temporal's default data converter with
-  no custom codec — and frozen, so nothing mutates a value once sent.
+  created deterministically in workflow code, so a retried activity retries
+  against the same key. `sandbox/contract/types.py` keeps the module
+  JSON-native, so Temporal's default data converter round-trips it with no
+  custom codec, and frozen, so nothing mutates a value once sent.
 - **Two failure classes.** Infrastructure failures raise and are retryable; job
   outcomes — a non-zero exit, a timed-out job — are data, returned in an
   `ExecResult`.
@@ -58,7 +56,7 @@ Every dataclass in `sandbox/contract/types.py`, copied field for field:
 
 ## The operations
 
-The nine names built by `activity_name` in `sandbox/contract/names.py`, matched
+The eleven names built by `activity_name` in `sandbox/contract/names.py`, matched
 against the `Lease`/`Sandbox` methods that call them:
 
 | Operation | Queue | Returns | What it does |
@@ -72,9 +70,11 @@ against the `Lease`/`Sandbox` methods that call them:
 | `get_file` | VM | `FileStat` | uploads a VM path and returns its URI |
 | `ensure_artifact` | VM | `ArtifactRef` | fetches and verifies an artifact by sha256, caching it |
 | `describe` | VM | `VmInfo` | reports the VM's own identity and load |
+| `snapshot` | VM | `SnapshotRef` | tars a workspace directory to the object store |
+| `restore` | VM | `SnapshotRef` | unpacks one on any VM |
 
 `acquire` and `release` are the only two that run on `MANAGER_TASK_QUEUE`; the
-other seven are `VM_OPERATIONS`, and only run once a lease names a
+other nine are `VM_OPERATIONS`, and only run once a lease names a
 `vm_task_queue(vm_id)` for the client to call them on.
 
 ## Semantics that matter
@@ -166,7 +166,7 @@ until release.
 ## Read the code
 
 - `sandbox/contract/version.py` — `CONTRACT_MAJOR`, `CONTRACT_VERSION`.
-- `sandbox/contract/names.py` — `activity_name`, `vm_task_queue`, the nine
+- `sandbox/contract/names.py` — `activity_name`, `vm_task_queue`, the eleven
   operation constants, `VM_OPERATIONS`.
 - `sandbox/contract/types.py` — every dataclass this chapter's table lists.
 - `sandbox/contract/errors.py` — the six error types, `SandboxError`.

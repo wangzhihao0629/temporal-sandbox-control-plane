@@ -44,16 +44,19 @@ show:
 image:
 	./scripts/build-image.sh
 
-.PHONY: check-sudoers
+.PHONY: check-sudoers check-network
 check-sudoers:
 	./scripts/check-sudoers.sh
+
+check-network:
+	./scripts/check-network.sh
 
 .PHONY: artifact
 
 artifact:
 	$(UV) run python -m sandbox.runner.package
 
-.PHONY: demo session chaos-kill chaos-stop chaos-delete policy reconcile hold terminate
+.PHONY: demo session gobuild chaos-kill chaos-stop chaos-delete policy reconcile hold terminate
 
 SECONDS ?= 120
 
@@ -68,6 +71,9 @@ session:
 	  $(if $(TURN_SECONDS),--turn-seconds $(TURN_SECONDS)) \
 	  $(if $(TURN_TIMEOUT),--turn-timeout $(TURN_TIMEOUT)) \
 	  $(if $(STEP_TIMEOUT),--step-timeout $(STEP_TIMEOUT))
+
+gobuild:
+	$(UV) run python -m sandbox.orchestrator.run_gobuild $(foreach a,$(ARGS),--arg=$(a))
 
 chaos-kill:
 	$(UV) run python -m sandbox.manager.chaos kill $(VM)

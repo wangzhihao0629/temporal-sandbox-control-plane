@@ -144,7 +144,7 @@ clone, lint, test, the loop, and export are unchanged.
 - `sandbox/orchestrator/activities.py` — `read_envelope`, `publish_summary`.
 - `sandbox/orchestrator/run_session.py` — the `make session`/`make demo` entry.
 - `sandbox/contract/errors.py` — `SandboxError`, `LeaseLost`, `ExecFailed`.
-- `sandbox/runner/cli.py` — the five subcommands, the one non-zero exit code.
+- `sandbox/runner/cli.py` — the nine subcommands, the one non-zero exit code.
 - `sandbox/runner/session.py` — `clone`, `run_turn`, `export`, `SessionState`.
 - `sandbox/runner/agent.py`, `scenarios.py` — `run_fake_turn`,
   `run_claude_turn`, `apply_edit`, the four `Scenario` definitions.

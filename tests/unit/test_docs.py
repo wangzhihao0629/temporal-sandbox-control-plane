@@ -18,6 +18,7 @@ CHAPTERS = [
     "07-dashboard.md",
     "08-running-the-demo.md",
     "09-from-demo-to-production.md",
+    "10-snapshots-egress-and-a-real-build.md",
 ]
 REQUIRED_SECTIONS = ("## Read the code", "## Where this maps in production", "## Try it")
 PATH_RE = re.compile(

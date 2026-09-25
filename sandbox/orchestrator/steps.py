@@ -1,6 +1,6 @@
 """What a session asks a VM to do, and how a step's answer comes back.
 
-What: `ExecSpec` builders for the five runner steps, the object-store layout of
+What: `ExecSpec` builders for the runner steps, the object-store layout of
 a session, the two orchestrator activity names, and `run_step`, which runs a
 spec on the leased VM and reads its envelope.
 Why: every step is its own exec activity with its own timeout, so the
@@ -62,6 +62,10 @@ class SessionUris:
     @property
     def summary(self) -> str:
         return f"s3://sandbox-out/{self.session_id}/summary.json"
+
+    @property
+    def snapshot(self) -> str:
+        return f"{self.session}/snapshots/repo.tar.gz"
 
 
 @dataclass(frozen=True)
@@ -169,6 +173,24 @@ def test_spec(ctx: StepContext, uris: SessionUris, turn: int) -> ExecSpec:
 def export_spec(ctx: StepContext, uris: SessionUris, turn: int) -> ExecSpec:
     args = ["--session-uri", uris.session]
     return _spec(ctx, uris, "export", turn, args, ctx.step_timeout_seconds)
+
+
+def fetch_spec(ctx: StepContext, uris: SessionUris, url: str, ref: str) -> ExecSpec:
+    return _spec(ctx, uris, "fetch", 0, ["--url", url, "--ref", ref], ctx.step_timeout_seconds)
+
+
+def edit_spec(ctx: StepContext, uris: SessionUris, edit: str) -> ExecSpec:
+    return _spec(ctx, uris, "edit", 0, ["--edit", edit], ctx.step_timeout_seconds)
+
+
+def build_spec(ctx: StepContext, uris: SessionUris, package: str) -> ExecSpec:
+    return _spec(ctx, uris, "build", 0, ["--package", package], ctx.step_timeout_seconds)
+
+
+def run_spec(ctx: StepContext, uris: SessionUris, args: list[str]) -> ExecSpec:
+    # `--arg=-r`, not `--arg -r`: argparse would read a bare `-r` as a flag.
+    flags = [f"--arg={arg}" for arg in args]
+    return _spec(ctx, uris, "run", 0, flags, ctx.step_timeout_seconds)
 
 
 async def _read_envelope(

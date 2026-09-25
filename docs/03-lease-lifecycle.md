@@ -77,7 +77,7 @@ and the VM is stranded in `terminating`" — then releases and sets `terminated`
 
 Every VM-queue activity calls `self._touch()`, which runs
 `registry.touch_lease(vm_id)` — `sandbox/vm_agent/activities.py` wires this
-into all seven VM operations. `touch_lease` extends `lease_expires_at` by the
+into all nine VM operations. `touch_lease` extends `lease_expires_at` by the
 `hold_seconds` recorded at claim time and bumps `last_heartbeat_at`, so a lease
 under active use never expires from age alone. Spec §6.5: the real orphan
 signal is owner-workflow liveness, not expiry — the backstop for a caller that

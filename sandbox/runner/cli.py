@@ -1,6 +1,7 @@
 """The runner command line.
 
-What: argparse over five subcommands; every one writes its envelope to
+What: argparse over the coding session's five subcommands and the Go build
+demo's four (fetch, edit, build, run); every one writes its envelope to
 `--envelope-uri`, including when it raised, and exits 1 only then.
 Why: the orchestrator treats a non-zero exit as "the step broke" and the
 envelope as the step's answer, so both must be written no matter what
@@ -15,7 +16,7 @@ import traceback
 from pathlib import Path
 
 from sandbox.objectstore import ObjectStore
-from sandbox.runner import checks, envelopes, session
+from sandbox.runner import checks, envelopes, gobuild, session
 
 
 def cmd_clone(args, store):
@@ -47,6 +48,22 @@ def cmd_test(args, store):
 
 def cmd_export(args, store):
     return session.export(store, Path(args.workspace), args.session_uri)
+
+
+def cmd_fetch(args, store):
+    return gobuild.fetch(Path(args.workspace), args.url, args.ref)
+
+
+def cmd_edit(args, store):
+    return gobuild.edit(Path(args.workspace), args.edit)
+
+
+def cmd_build(args, store):
+    return gobuild.build(Path(args.workspace), args.package)
+
+
+def cmd_run(args, store):
+    return gobuild.run(Path(args.workspace), args.arg or [])
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -86,6 +103,27 @@ def _parser() -> argparse.ArgumentParser:
     common(p)
     p.add_argument("--session-uri", required=True)
     p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("fetch")
+    common(p)
+    p.add_argument("--url", required=True)
+    p.add_argument("--ref", required=True)
+    p.set_defaults(func=cmd_fetch)
+
+    p = sub.add_parser("edit")
+    common(p)
+    p.add_argument("--edit", required=True)
+    p.set_defaults(func=cmd_edit)
+
+    p = sub.add_parser("build")
+    common(p)
+    p.add_argument("--package", required=True)
+    p.set_defaults(func=cmd_build)
+
+    p = sub.add_parser("run")
+    common(p)
+    p.add_argument("--arg", action="append", help="an argument to pass to the binary")
+    p.set_defaults(func=cmd_run)
     return parser
 
 

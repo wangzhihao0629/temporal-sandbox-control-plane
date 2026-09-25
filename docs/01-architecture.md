@@ -82,7 +82,7 @@ CLI and parsing its JSON. Every call carries its own timeout, because a wedged
 daemon must not be able to hold a manager activity thread forever.
 
 **Runner** (`sandbox/runner/`) — "the code the orchestrator ships to a VM," in
-its own words: a CLI with five subcommands, versioned by the artifact the
+its own words: a CLI with nine subcommands, versioned by the artifact the
 orchestrator asks for, so the orchestrator — not the VM image — decides which
 runner runs.
 

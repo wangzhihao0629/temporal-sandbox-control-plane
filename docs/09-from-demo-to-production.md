@@ -35,7 +35,7 @@ keeps serving traffic until each phase is ready:
    its floor — the same signal chapter 03's fleet sample already demonstrates —
    with no macOS session yet moved onto it.
 3. **Split clone, push, and PR into exec activities; move the orchestrator to
-   EKS.** Moves the turn loop off the macOS host and behind the same nine
+   EKS.** Moves the turn loop off the macOS host and behind the same eleven
    contract operations chapter 02 named. What proves it: a Temporal history
    showing `sandbox.v1.exec_start`/`exec_wait` pairs per step, the shape
    `CodingSessionDemoWorkflow` already produces, instead of one long
@@ -130,11 +130,10 @@ the production Terraform, picking up the five phases above, behind spec
 
 ## Try it
 
-Nothing to run: this chapter is a map, not a drill. To see the boundary the
-table above draws, compare a module's own docstring against its own
-"Production:" line — `sandbox/contract/names.py`,
+Nothing to run: this chapter is a map. To see the boundary the table draws,
+compare a docstring against its "Production:" line — `sandbox/contract/names.py`,
 `sandbox/vm_agent/runtime.py`, and
 `sandbox/manager/providers/apple_container.py` each say outright what changes
 and what does not.
 
-Back to the [index](../README.md)
+Next: [10 · Snapshots, egress, and a real build](10-snapshots-egress-and-a-real-build.md)

@@ -154,7 +154,7 @@
 
   <header class="hero">
     <h1>Sandbox Control Plane</h1>
-    <p class="thesis">A Temporal workflow leases a VM, drives it through nine versioned activities, and hands it back. The workflow never runs on the machine it uses.</p>
+    <p class="thesis">A Temporal workflow leases a VM, drives it through eleven versioned activities, and hands it back. The workflow never runs on the machine it uses.</p>
     <div class="provenance">
       <span><b>Verified against</b> <code>sandbox/</code> at commit <code>6049106</code> (2026-09-10)</span>
       <span><b>Original diagram</b> corrected in 5 places — flagged inline</span>
@@ -218,7 +218,8 @@ sbx-*"]
   API -->|summaries, log tails| S3B
   API -->|owner workflow status| T
   T -->|"exec_start / exec_wait / put_file / get_file /
-ensure_artifact / exec_cancel / describe"| AGENT
+ensure_artifact / exec_cancel / describe /
+snapshot / restore"| AGENT
   AGENT -.->|"register, heartbeat, touch_lease
 direct writes — not Temporal"| DB
   AGENT -->|sudo -u agent| JOB
@@ -274,7 +275,7 @@ sequenceDiagram
     <p class="diagram-caption">Twenty-nine activities for a two-turn session: one acquire, one artifact, eight steps of start/wait/read, one file, one summary, one release. If the VM dies mid-turn, <code>exec_wait</code> raises <code>LeaseLost</code>, release runs from the <code>finally</code>, and the loop leases another VM whose clone restores the bundle saved after the last finished turn.</p>
     <div class="fixnote">
       <span class="tag">Corrected</span>
-      <code>read_envelope</code> and <code>publish_summary</code> live in their own <code>orchestrator.*</code> namespace, not <code>sandbox.v1.*</code> — and the full <code>sandbox.v1.*</code> roster also includes <code>exec_cancel</code>, <code>put_file</code>, and <code>describe</code>, none of which this particular session exercises.
+      <code>read_envelope</code> and <code>publish_summary</code> live in their own <code>orchestrator.*</code> namespace, not <code>sandbox.v1.*</code> — and the full <code>sandbox.v1.*</code> roster also includes <code>exec_cancel</code>, <code>put_file</code>, <code>describe</code>, <code>snapshot</code>, and <code>restore</code>, none of which this particular session exercises (the Go build demo uses the last two, see chapter 10).
       <span class="cite">sandbox/orchestrator/steps.py:28–29 · activities.py:39,55 · sandbox/manager/activities.py:47,82 · vm_agent/activities.py:212–329</span>
     </div>
   </section>

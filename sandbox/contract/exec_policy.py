@@ -9,7 +9,7 @@ constrains what a workflow can make a VM run. This is independent of the pool
 policy (min_idle/max) in `sandbox.manager.reconciler` — that one bounds how
 many VMs exist, this one bounds what runs on them. `DEMO_POLICY` allowlists
 the exec shapes this demo's own workflows actually send today: the coding
-session's `bin/runner` steps, `SmokeWorkflow`'s `uname`/`id`, and
+session's and the Go build demo's `bin/runner` steps, `SmokeWorkflow`'s `uname`/`id`, and
 `HoldWorkflow`'s `sleep <seconds>` — not a speculative "known safe commands"
 list, the real repertoire.
 Production: the same rule shapes seed the VM image's sudoers `Cmnd_Alias`
@@ -35,7 +35,7 @@ from sandbox.contract.errors import Incompatible
 # non-digest segment (a traversal, an attacker-planted directory name) can
 # satisfy "exactly 64 hex characters". A new step adds a name to
 # RUNNER_STEPS; it does not touch exec_start or the client.
-RUNNER_STEPS = ("clone", "turn", "lint", "test", "export")
+RUNNER_STEPS = ("clone", "turn", "lint", "test", "export", "fetch", "edit", "build", "run")
 _RUNNER_PATH = re.compile(r"^/.*/[0-9a-f]{64}/bin/runner$")
 
 

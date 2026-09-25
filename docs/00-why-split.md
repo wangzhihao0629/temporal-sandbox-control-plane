@@ -57,7 +57,7 @@ which VM, if any, is this workflow allowed to touch right now. The other seven
 lease names it, and they are exactly the four families the demo promises:
 **exec** (`exec_start`, `exec_wait`, `exec_cancel`), **files** (`put_file`,
 `get_file`), **artifacts** (`ensure_artifact`), and **describe**. A workflow
-that only ever calls these nine names never needs to know what a VM is made of,
+that only ever calls these eleven names never needs to know what a VM is made of,
 only that one exists somewhere behind a queue name.
 
 ## Two designs, one chosen
@@ -117,7 +117,7 @@ provider, and object store the workflow and the VM agent actually use.
 
 ## Read the code
 
-- `sandbox/contract/names.py` — the nine operation names, and how
+- `sandbox/contract/names.py` — the eleven operation names, and how
   `activity_name` turns an op into `sandbox.v1.<op>`.
 - `sandbox/contract/version.py` — `CONTRACT_MAJOR`, the number that becomes the
   `v1` every activity name carries.

@@ -6,6 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-venv python3-pip git sudo util-linux procps ca-certificates curl \
+      golang-go nftables \
     && rm -rf /var/lib/apt/lists/*
 
 # Two users. sandbox-agent runs the worker and owns the state directories.

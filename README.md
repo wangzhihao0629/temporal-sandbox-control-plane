@@ -27,6 +27,13 @@ standing in for DynamoDB and S3, Apple `container` VMs, and a live dashboard.
 - **Everything is watchable.** A dashboard joins the registry, the VM
   provider, Temporal, and S3 into one page with a live event feed; the
   Temporal UI shows every activity on its queue.
+- **A real build, snapshotted and restored elsewhere.** Clone a Go repository
+  from GitHub, edit it, compile and run it in one VM, snapshot the result, and
+  run the restored binary on a second VM without rebuilding.
+- **Jobs are fenced in.** A job may only run commands on an allowlist, only
+  through a narrowed sudo rule, and only reach the network hosts its policy
+  names (github.com, for the demo) — each checked against a real VM by
+  `make check-sudoers` and `make check-network`.
 
 See [`docs/sandbox-control-plane.html`](docs/sandbox-control-plane.html) for
 a full diagram of the components, one coding session traced activity by
@@ -68,7 +75,10 @@ make session SCENARIO=multiply-with-bug   # a session with a fix loop
 make chaos-kill VM=<vm-id>                # kill a leased VM mid-turn
 make chaos-stop VM=<vm-id>                # drain a leased VM (SIGTERM)
 make hold SECONDS=120                     # hold a lease, then orphan it
+make gobuild                              # clone, edit, build, run, snapshot, restore
 make show                                 # raw registry/fleet snapshot
+make check-sudoers                        # what the VM's sudo rule allows and refuses
+make check-network                        # what a job may connect to
 ```
 
 [Chapter 08](docs/08-running-the-demo.md) walks through all twelve demo
@@ -90,6 +100,7 @@ A numbered course, each chapter building on the last:
 - [07 · Watching it: the status API and dashboard](docs/07-dashboard.md)
 - [08 · Running the demo](docs/08-running-the-demo.md)
 - [09 · From demo to production](docs/09-from-demo-to-production.md)
+- [10 · Snapshots, egress, and a real build](docs/10-snapshots-egress-and-a-real-build.md)
 
 ## Testing
 

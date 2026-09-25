@@ -25,7 +25,9 @@ def _runner_argv(step: str, *extra: str) -> list[str]:
     ]
 
 
-@pytest.mark.parametrize("step", ["clone", "turn", "lint", "test", "export"])
+@pytest.mark.parametrize(
+    "step", ["clone", "turn", "lint", "test", "export", "fetch", "edit", "build", "run"]
+)
 def test_demo_policy_allows_every_runner_step(step):
     DEMO_POLICY.check(_runner_argv(step))
 

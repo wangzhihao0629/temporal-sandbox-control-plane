@@ -22,7 +22,7 @@ of `uri@sha256` pairs.
 directories; calls `registry.register_vm`, writing the `booting` row with
 `SUPPORTED_MAJORS` from `sandbox/contract/version.py`; fetches each
 prefetch pair into the artifact cache; starts a Temporal `Worker` on
-`vm_task_queue(cfg.vm_id)` carrying all seven activities; flips the row to
+`vm_task_queue(cfg.vm_id)` carrying all nine activities; flips the row to
 `idle` (conditional on `booting`); emits a `boot` event; and starts the
 heartbeat loop.
 
@@ -69,11 +69,11 @@ reads the same record, so a retried wait reattaches instead of starting a
 new job; an unrecognized `job_id` raises `Incompatible`, since no retry
 makes a job appear on a machine that never started it.
 
-## The seven activities
+## The nine activities
 
-`VmActivities.all()` lists the seven names chapter 02 called
+`VmActivities.all()` lists the nine names chapter 02 called
 `VM_OPERATIONS`: `exec_start`, `exec_wait`, `exec_cancel`, `put_file`,
-`get_file`, `ensure_artifact`, `describe`. Every one calls `self._touch()`
+`get_file`, `ensure_artifact`, `describe`, `snapshot`, `restore`. Every one calls `self._touch()`
 (`registry.touch_lease`) — a no-op on an unleased VM, otherwise what keeps
 a lease alive under a running job.
 
