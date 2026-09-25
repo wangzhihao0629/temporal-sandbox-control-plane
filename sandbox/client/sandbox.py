@@ -23,6 +23,7 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
+from temporalio.workflow import ActivityCancellationType
 
 from sandbox.client.timeouts import Timeouts
 from sandbox.client.translate import translate
@@ -95,6 +96,7 @@ class Lease:
         start_to_close: timedelta,
         heartbeat_timeout: timedelta | None = None,
         result_type=None,
+        cancellation_type: ActivityCancellationType = ActivityCancellationType.TRY_CANCEL,
     ):
         if self.lost:
             raise LeaseLost(f"lease {self.lease.lease_id} on {self.lease.vm_id} was lost")
@@ -112,6 +114,7 @@ class Lease:
                     non_retryable_error_types=list(VM_NON_RETRYABLE),
                 ),
                 result_type=result_type,
+                cancellation_type=cancellation_type,
             )
         except ActivityError as e:
             mapped = translate(e, vm_call=True)
@@ -136,6 +139,9 @@ class Lease:
             start_to_close=timedelta(seconds=timeout_seconds) + self.t.wait_slack,
             heartbeat_timeout=self.t.heartbeat,
             result_type=ExecResult,
+            # So a workflow cancel reaches the VM as an explicit cancel, which is
+            # how the agent tells it apart from a missed heartbeat.
+            cancellation_type=ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
         )
 
     async def exec(self, spec: ExecSpec, check: bool = True) -> ExecResult:

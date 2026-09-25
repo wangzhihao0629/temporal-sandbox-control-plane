@@ -67,6 +67,24 @@ _VM_IDENTITY_KEYS = (
 )
 
 
+def _cancel_was_requested() -> bool:
+    """True when the workflow meant to stop the job, not when the wait timed out.
+
+    A workflow cancel or a workflow reset abandons the job. A heartbeat timeout
+    reaches the activity as `not_found` and must not: the job is fine and the
+    retried wait should find it running. The client waits for exec_wait's
+    cancellation to complete (`WAIT_CANCELLATION_COMPLETED`), which is what makes
+    a workflow cancel arrive as `cancel_requested` rather than as that same
+    `not_found`. A terminated workflow's job is left too; the reconciler releases
+    the orphaned lease and the recycle wipe kills it. With no details to go on,
+    keep the old behaviour and treat it as a cancel.
+    """
+    details = activity.cancellation_details()
+    if details is None:
+        return True
+    return details.cancel_requested or details.reset
+
+
 def _heartbeat_interval(timeout: timedelta | None) -> float:
     """How often exec_wait should beat, given the timeout Temporal will enforce.
 
@@ -291,8 +309,11 @@ class VmActivities:
                     self._stop_and_flush(req.job_id, spec.log_uri, "cancelled", 10)
                 )
                 raise HostDraining() from None
-            if activity.is_worker_shutdown():
-                # Leave the job running; the retried wait will reattach to it.
+            if activity.is_worker_shutdown() or not _cancel_was_requested():
+                # Leave the job running; the retried wait will reattach to it. A
+                # missed heartbeat (a busy host, a network blip) cancels this
+                # activity too, and killing a healthy job for it would turn a
+                # retryable hiccup into a failed step.
                 raise
             await asyncio.shield(self._stop_and_flush(req.job_id, spec.log_uri, "cancelled", 10))
             raise

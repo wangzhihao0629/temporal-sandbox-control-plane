@@ -298,3 +298,39 @@ async def test_cancelling_the_workflow_kills_the_job(env, aws, vm, orchestrator)
     assert jobs.running_job_ids() == []
     job_id = registry.list_jobs(vm.vm_id)[0]["job_id"]
     assert jobs.status(job_id).reason == "cancelled"
+
+
+async def test_a_missed_heartbeat_leaves_the_job_running_for_the_retry(
+    env, aws, vm, orchestrator, monkeypatch
+):
+    # The first wait sends no heartbeats, so Temporal times it out while the job is
+    # perfectly healthy — what a busy host or a network blip does. The job must
+    # survive that, so the retried wait reattaches and sees it finish normally.
+    # Before the fix the timeout's cancellation killed the job, and the retry
+    # found a `cancelled` job instead.
+    from temporalio import activity as temporal_activity
+
+    real_heartbeat = temporal_activity.heartbeat
+    started = time.monotonic()
+
+    def first_attempt_goes_quiet_then_resumes(*details):
+        # Quiet past the 2 s heartbeat timeout, then heartbeating again: the late
+        # heartbeat is how the attempt learns it was timed out, as a stalled host would.
+        if temporal_activity.info().attempt > 1 or time.monotonic() - started > 3.5:
+            real_heartbeat(*details)
+
+    monkeypatch.setattr(temporal_activity, "heartbeat", first_attempt_goes_quiet_then_resumes)
+    result = await _run(
+        env,
+        orchestrator,
+        RunCommandWorkflow,
+        RunCommandParams(
+            task_queue=vm.task_queue,
+            cwd=_ws(vm),
+            argv=["sh", "-c", "sleep 6; echo survived"],
+            wait_heartbeat_seconds=2,
+            wait_max_attempts=3,
+        ),
+    )
+    assert result.status == "exited" and result.exit_code == 0
+    assert result.stdout_tail.strip() == "survived"

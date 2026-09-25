@@ -86,6 +86,7 @@ class RunCommandWorkflow:
             schedule_to_start_timeout=timedelta(seconds=10),
             start_to_close_timeout=timedelta(seconds=p.wait_start_to_close_seconds),
             heartbeat_timeout=timedelta(seconds=p.wait_heartbeat_seconds),
+            cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
             retry_policy=RetryPolicy(
                 maximum_attempts=p.wait_max_attempts, initial_interval=timedelta(seconds=1)
             ),
