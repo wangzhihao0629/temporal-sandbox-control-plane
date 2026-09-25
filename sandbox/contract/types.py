@@ -122,3 +122,25 @@ class VmInfo:
     uptime_seconds: float
     disk_free_bytes: int
     running_jobs: int
+
+
+@dataclass(frozen=True)
+class SnapshotRequest:
+    path: str
+    dst_uri: str
+
+
+@dataclass(frozen=True)
+class SnapshotRef:
+    uri: str
+    sha256: str
+    size: int
+    files: int
+    path: str
+
+
+@dataclass(frozen=True)
+class RestoreRequest:
+    src_uri: str
+    sha256: str
+    path: str

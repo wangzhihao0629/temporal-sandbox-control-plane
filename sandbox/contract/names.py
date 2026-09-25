@@ -39,5 +39,17 @@ PUT_FILE = activity_name("put_file")
 GET_FILE = activity_name("get_file")
 ENSURE_ARTIFACT = activity_name("ensure_artifact")
 DESCRIBE = activity_name("describe")
+SNAPSHOT = activity_name("snapshot")
+RESTORE = activity_name("restore")
 
-VM_OPERATIONS = (EXEC_START, EXEC_WAIT, EXEC_CANCEL, PUT_FILE, GET_FILE, ENSURE_ARTIFACT, DESCRIBE)
+VM_OPERATIONS = (
+    EXEC_START,
+    EXEC_WAIT,
+    EXEC_CANCEL,
+    PUT_FILE,
+    GET_FILE,
+    ENSURE_ARTIFACT,
+    DESCRIBE,
+    SNAPSHOT,
+    RESTORE,
+)

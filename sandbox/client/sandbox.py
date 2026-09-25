@@ -49,8 +49,11 @@ from sandbox.contract.types import (
     GetFileRequest,
     PutFileRequest,
     ReleaseRequest,
+    RestoreRequest,
     SandboxLease,
     SandboxSpec,
+    SnapshotRef,
+    SnapshotRequest,
     VmInfo,
     WaitRequest,
 )
@@ -174,6 +177,22 @@ class Lease:
             start_to_close=self.t.file_transfer,
             heartbeat_timeout=self.t.short,
             result_type=ArtifactRef,
+        )
+
+    async def snapshot(self, path: str, dst_uri: str) -> SnapshotRef:
+        return await self._call(
+            names.SNAPSHOT,
+            SnapshotRequest(path=path, dst_uri=dst_uri),
+            start_to_close=self.t.file_transfer,
+            result_type=SnapshotRef,
+        )
+
+    async def restore(self, snap: SnapshotRef, path: str) -> SnapshotRef:
+        return await self._call(
+            names.RESTORE,
+            RestoreRequest(src_uri=snap.uri, sha256=snap.sha256, path=path),
+            start_to_close=self.t.file_transfer,
+            result_type=SnapshotRef,
         )
 
     async def describe(self) -> VmInfo:

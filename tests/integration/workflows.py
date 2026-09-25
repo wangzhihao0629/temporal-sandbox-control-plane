@@ -21,6 +21,9 @@ from sandbox.contract.types import (
     FileStat,
     GetFileRequest,
     PutFileRequest,
+    RestoreRequest,
+    SnapshotRef,
+    SnapshotRequest,
     VmInfo,
     WaitRequest,
 )
@@ -151,4 +154,37 @@ class DescribeWorkflow:
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=_ONCE,
             result_type=VmInfo,
+        )
+
+
+@dataclass
+class SnapshotParams:
+    from_queue: str
+    to_queue: str
+    src_path: str
+    dst_path: str
+    uri: str
+
+
+@workflow.defn
+class SnapshotRestoreWorkflow:
+    """Snapshot a directory on one VM and restore it on another."""
+
+    @workflow.run
+    async def run(self, p: SnapshotParams) -> SnapshotRef:
+        snap = await workflow.execute_activity(
+            names.SNAPSHOT,
+            SnapshotRequest(path=p.src_path, dst_uri=p.uri),
+            task_queue=p.from_queue,
+            start_to_close_timeout=timedelta(seconds=60),
+            retry_policy=_ONCE,
+            result_type=SnapshotRef,
+        )
+        return await workflow.execute_activity(
+            names.RESTORE,
+            RestoreRequest(src_uri=snap.uri, sha256=snap.sha256, path=p.dst_path),
+            task_queue=p.to_queue,
+            start_to_close_timeout=timedelta(seconds=60),
+            retry_policy=_ONCE,
+            result_type=SnapshotRef,
         )

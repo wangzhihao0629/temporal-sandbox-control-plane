@@ -1,7 +1,7 @@
 """The VM agent's activities: the VM side of the contract.
 
 What: exec_start, exec_wait, exec_cancel, put_file, get_file, ensure_artifact,
-describe, registered under the versioned names in sandbox.contract.names.
+describe, snapshot, restore, registered under the versioned names in sandbox.contract.names.
 Why: these are the only things a workflow can ask a VM to do. Every one is
 idempotent on its key, validates its input, touches the lease so it does not
 expire under a running job, and never returns bytes larger than a tail.
@@ -30,6 +30,9 @@ from sandbox.contract.types import (
     FileStat,
     GetFileRequest,
     PutFileRequest,
+    RestoreRequest,
+    SnapshotRef,
+    SnapshotRequest,
     VmInfo,
     WaitRequest,
 )
@@ -37,7 +40,7 @@ from sandbox.contract.version import SUPPORTED_MAJORS
 from sandbox.objectstore import ObjectStore
 from sandbox.registry.client import Registry
 from sandbox.timeutil import now_iso
-from sandbox.vm_agent import files
+from sandbox.vm_agent import files, snapshots
 from sandbox.vm_agent.artifacts import ArtifactCache
 from sandbox.vm_agent.config import AgentConfig
 from sandbox.vm_agent.drain import DrainState
@@ -104,6 +107,8 @@ class VmActivities:
             self.get_file,
             self.ensure_artifact,
             self.describe,
+            self.snapshot,
+            self.restore,
         ]
 
     # ---- helpers -------------------------------------------------------------
@@ -326,6 +331,20 @@ class VmActivities:
         await self._touch()
         path = await asyncio.to_thread(self.artifacts.ensure, req.uri, req.sha256)
         return ArtifactRef(uri=req.uri, sha256=req.sha256, path=str(path))
+
+    @activity.defn(name=names.SNAPSHOT)
+    async def snapshot(self, req: SnapshotRequest) -> SnapshotRef:
+        path = validate_path_under(req.path, self.cfg.workspace_root)
+        await self._touch()
+        return await asyncio.to_thread(snapshots.snapshot, self.store, path, req.dst_uri)
+
+    @activity.defn(name=names.RESTORE)
+    async def restore(self, req: RestoreRequest) -> SnapshotRef:
+        path = validate_path_under(req.path, self.cfg.workspace_root)
+        await self._touch()
+        return await asyncio.to_thread(
+            snapshots.restore, self.store, req.src_uri, req.sha256, path
+        )
 
     @activity.defn(name=names.DESCRIBE)
     async def describe(self) -> VmInfo:

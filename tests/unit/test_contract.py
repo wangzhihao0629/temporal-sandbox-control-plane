@@ -17,8 +17,11 @@ from sandbox.contract.types import (
     GetFileRequest,
     PutFileRequest,
     ReleaseRequest,
+    RestoreRequest,
     SandboxLease,
     SandboxSpec,
+    SnapshotRef,
+    SnapshotRequest,
     VmInfo,
     WaitRequest,
 )
@@ -78,12 +81,26 @@ WIRE_VALUES = [
         disk_free_bytes=1024,
         running_jobs=2,
     ),
+    SnapshotRequest(path="/private/tmp/sandbox/x/repo", dst_uri="s3://sandbox-sessions/x/s.tgz"),
+    SnapshotRef(
+        uri="s3://sandbox-sessions/x/s.tgz",
+        sha256="0" * 64,
+        size=1024,
+        files=3,
+        path="/private/tmp/sandbox/x/repo",
+    ),
+    RestoreRequest(
+        src_uri="s3://sandbox-sessions/x/s.tgz",
+        sha256="0" * 64,
+        path="/private/tmp/sandbox/x/repo",
+    ),
 ]
 
 
 def test_activity_names_carry_the_major():
     assert names.EXEC_START == f"sandbox.v{CONTRACT_MAJOR}.exec_start"
     assert names.ACQUIRE == f"sandbox.v{CONTRACT_MAJOR}.acquire"
+    assert names.SNAPSHOT in names.VM_OPERATIONS and names.RESTORE in names.VM_OPERATIONS
     assert names.vm_task_queue("sbx-1234abcd") == "sandbox-vm-sbx-1234abcd"
     assert CONTRACT_VERSION.startswith(f"{CONTRACT_MAJOR}.")
 
