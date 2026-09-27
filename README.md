@@ -193,6 +193,8 @@ Then `make down && make up`.
 ## Quick start
 
 ```sh
+git clone https://github.com/wangzhihao0629/temporal-sandbox-control-plane.git
+cd temporal-sandbox-control-plane
 make bootstrap   # uv sync; checks for the temporal and container CLIs
 make up          # container system, Temporal dev server, moto, .env
 make image       # builds the sandbox-vm:dev image (a few minutes the first time)
