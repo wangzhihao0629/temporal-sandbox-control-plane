@@ -151,9 +151,8 @@ A `CodingSessionDemoWorkflow` run, from the orchestrator's perspective:
 ## Where this maps in production
 
 Spec §4's component table gives each piece here a named production successor:
-the orchestrator worker becomes the orchestrator worker on EKS —
-`sandbox-orchestrator` in its own docstring, the `agent-orchestrator` deploy in spec §4's
-table — running the production agent; the sandbox manager worker becomes a `sandbox-manager`
+the orchestrator worker becomes the orchestrator worker on EKS, running the
+production agent; the sandbox manager worker becomes a `sandbox-manager`
 worker on EKS; the registry's DynamoDB API, mocked locally by `moto_server`,
 becomes real DynamoDB; the provider's Apple `container` calls become EC2 and
 ASG APIs; the VM agent ships unchanged as the package an AMI installs; the
