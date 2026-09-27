@@ -1,6 +1,6 @@
-"""policy_cli: merging flags into the stored pool policy."""
+"""merge_policy: merging flags into the stored pool policy."""
 
-from sandbox.manager.policy_cli import merge_policy
+from sandbox.manager.policy import merge_policy
 
 
 def test_merge_keeps_unspecified_fields_and_casts_numbers():

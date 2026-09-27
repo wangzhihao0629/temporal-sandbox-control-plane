@@ -60,7 +60,7 @@ goes through typed methods here, with the right queue, timeout, and error
 translation already attached.
 
 **Manager, with the reconciler** (`sandbox/manager/`,
-`sandbox/manager/reconciler.py`) — hosts the `acquire` and `release` activities
+`sandbox/manager/reconciler/core.py`) — hosts the `acquire` and `release` activities
 plus a scheduled `ReconcileWorkflow`. It runs as its own process so a manager
 outage stalls neither a lease already granted nor a turn already running,
 because both go straight to a VM's queue.
@@ -143,7 +143,7 @@ A `CodingSessionDemoWorkflow` run, from the orchestrator's perspective:
   code behind the numbered flow above.
 - `sandbox/client/sandbox.py` — `Sandbox.acquire`, `.release`, and `.lease()`,
   where each queue name is actually used in a `workflow.execute_activity` call.
-- `sandbox/manager/reconciler.py` — the reconciler steps behind "the fleet heals
+- `sandbox/manager/reconciler/core.py` — the reconciler steps behind "the fleet heals
   itself."
 - `sandbox/status/api.py` — the joins behind the dashboard's one page.
 - `Procfile` — the three host processes `make workers` starts together.

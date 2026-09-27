@@ -86,14 +86,14 @@ takes this seat."
 
 ## Chaos
 
-`sandbox/manager/chaos.py`'s `apply(provider, registry, action, vm_id)` is
+`sandbox/cli/chaos.py`'s `apply(provider, registry, action, vm_id)` is
 one dispatch table keyed by action name — `"kill"` to `provider.kill`,
 `"stop"` to `provider.stop`, `"delete"` to `provider.terminate` — called
 with `vm_id`, followed by `registry.emit("chaos", "chaos", ...)`, so every
 chaos action leaves the same event trail a real failure would. It is shared
 code: both `make chaos-kill`/`chaos-stop`/`chaos-delete` and the dashboard's
 chaos endpoint call this one function. Each action reaches the reconciler by
-a different path traced in `sandbox/manager/reconciler.py`. `kill` sends
+a different path traced in `sandbox/manager/reconciler/core.py`. `kill` sends
 `container kill --signal KILL`; the container then reports a state inside
 `DEAD_STATES`, so `health` matches its `provider_ref` in `stopped_refs` and
 calls `_write_off(vm_id, "instance stopped", "write_off_stopped", ...)`
@@ -117,8 +117,8 @@ has to notice at all.
   `InProcessVm`.
 - `sandbox/manager/launch.py` — `new_vm_id`, `launch_spec`,
   `vm_environment`.
-- `sandbox/manager/launch_vm.py` — the manual, one-VM launcher.
-- `sandbox/manager/chaos.py` — `apply`, `ACTIONS`.
+- `sandbox/cli/vm.py` — the manual, one-VM launcher.
+- `sandbox/cli/chaos.py` — `apply`, `ACTIONS`.
 - `scripts/up.sh` — the gateway default and its override, and the `.env` it
   writes.
 - `scripts/build-image.sh` — the lockfile export `container build` installs

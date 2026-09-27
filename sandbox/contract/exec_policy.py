@@ -6,7 +6,7 @@ again by the VM agent's `exec_start` before argv reaches sudo — so neither
 side has to trust the other's validation.
 Why: `ExecSpec.argv` is free-form strings; nothing else in the contract
 constrains what a workflow can make a VM run. This is independent of the pool
-policy (min_idle/max) in `sandbox.manager.reconciler` — that one bounds how
+policy (min_idle/max) in `sandbox.manager.reconciler.core` — that one bounds how
 many VMs exist, this one bounds what runs on them. `DEMO_POLICY` allowlists
 the exec shapes this demo's own workflows actually send today: the coding
 session's and the Go build demo's `bin/runner` steps, `SmokeWorkflow`'s `uname`/`id`, and

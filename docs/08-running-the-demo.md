@@ -52,7 +52,7 @@ the dashboard and the Temporal UI, and the file behind it.
 ### 1. Cold start
 
 `make up`, then `make workers`. Dashboard: the counters climb `booting` then
-`idle` as `sandbox/manager/reconciler.py`'s capacity step launches two VMs and
+`idle` as `sandbox/manager/reconciler/core.py`'s capacity step launches two VMs and
 each one's own `AgentRuntime.start` (`sandbox/vm_agent/runtime.py`) flips its
 row once its Temporal worker is up. Temporal UI: just the
 `sandbox-reconcile-demo` schedule firing every 15 seconds
@@ -62,7 +62,7 @@ row once its Temporal worker is up. Temporal UI: just the
 
 `make smoke`. Dashboard: a row goes `leased` and back to `idle` in seconds.
 Temporal UI: the acquire/describe/exec/release sequence chapter 02's "Try it"
-already walked through. Code path: `sandbox/orchestrator/run_smoke.py`,
+already walked through. Code path: `sandbox/cli/smoke.py`,
 `SmokeWorkflow` in `sandbox/orchestrator/workflows.py`.
 
 ### 3. A session with a fix loop
@@ -104,8 +104,8 @@ other restart, the agent's, in chapter 04.)
 `make chaos-kill VM=<leased vm id>` mid-turn. Dashboard: `write_off_stopped`,
 then a replacement `launch` event, as in chapter 05's own drill. Temporal UI:
 the interrupted `exec_wait` fails, followed by a fresh `acquire`. Code path:
-`sandbox/manager/chaos.py`'s `apply`, the health step in
-`sandbox/manager/reconciler.py`, the bundle resume in
+`sandbox/cli/chaos.py`'s `apply`, the health step in
+`sandbox/manager/reconciler/core.py`, the bundle resume in
 `sandbox/runner/session.py` — the same result chapter 06 already showed, run
 here as step 6 of the sequence.
 
@@ -116,8 +116,8 @@ here as step 6 of the sequence.
 ran. Dashboard: the row stays `leased` with its owner shown `Terminated` until
 the next reconcile pass releases it to `recycling`. Temporal UI: the held
 workflow's history ends in `Terminated` with no `release` activity ever
-recorded. Code path: `sandbox/orchestrator/terminate.py`, the leases step in
-`reconciler.py`.
+recorded. Code path: `sandbox/cli/terminate.py`, the leases step in
+`reconciler/core.py`.
 
 ### 8. Manager outage
 
@@ -146,7 +146,7 @@ the third session proceeds. Dashboard: a `launch` event and a third row
 climbing to `leased`. Code path: `record_pending` in
 `sandbox/manager/activities.py`, the
 `deficit = policy.min_idle + len(inv.pending) - available` line in
-`reconciler.py`.
+`reconciler/core.py`.
 
 ### 10. Drain
 
@@ -174,7 +174,7 @@ Once the sessions above finish and the idle VMs they leave behind sit past the
 120-second cooldown, the reconciler's capacity step retires the single idle VM
 whose last transition has cleared that cooldown — never one still holding a
 `protected` flag or one that only just went idle. Code path: the scale-in
-branch of `reconciler.py`'s `capacity`, candidates sorted by `created_at`.
+branch of `reconciler/core.py`'s `capacity`, candidates sorted by `created_at`.
 
 ## Tear it down
 
@@ -187,11 +187,11 @@ history, old ids included, survives a down-and-up cycle.
 
 ## When something is off
 
-Editing `sandbox/manager/reconcile.py` or `reconcile_activities.py` without
+Editing `sandbox/manager/reconciler/workflow.py` or `reconcile_activities.py` without
 restarting is the stale-worker symptom chapter 03 named. Restart with
 `make workers`. When the dashboard itself looks broken, fall back to
 `make show` (or `make vms` for the raw `container ls --all`) —
-`sandbox/registry/show.py` calls itself "the dashboard before there is a
+`sandbox/cli/show.py` calls itself "the dashboard before there is a
 dashboard." Three integration tests are wall-clock-sensitive on purpose:
 `test_a_crashed_vm_is_written_off_and_replaced`,
 `test_pending_demand_launches_and_surplus_scales_in`, and
@@ -208,13 +208,10 @@ threshold plus half a second before asserting a pass acted on it.
 - `scripts/build-image.sh` — the locked export `make image` builds from.
 - `Procfile` — the three processes `make workers` starts.
 - `sandbox/bootstrap.py` — the default pool policy `make up` seeds.
-- `sandbox/orchestrator/run_smoke.py`, `run_session.py`, `run_hold.py`,
-  `terminate.py` — the CLIs behind `make smoke`, `session`, `hold`,
-  `terminate`.
-- `sandbox/manager/chaos.py`, `policy_cli.py`, `reconcile_once.py`,
-  `launch_vm.py` — the CLIs behind `make chaos-kill`, `chaos-stop`,
-  `chaos-delete`, `policy`, `reconcile`, `vm`.
-- `sandbox/registry/show.py` — `make show`'s output.
+- `sandbox/cli/` — one module per make target: `make smoke` runs
+  `sandbox/cli/smoke.py`, and likewise `session`, `hold`, `terminate`,
+  `chaos` (for `chaos-kill`, `chaos-stop`, `chaos-delete`), `policy`,
+  `reconcile`, `vm`, and `show`.
 - `tests/integration/test_reconcile.py` — the three wall-clock-sensitive tests.
 
 ## Where this maps in production

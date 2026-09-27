@@ -16,7 +16,7 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from sandbox.manager.reconcile_types import (
+from sandbox.manager.reconciler.types import (
     CAPACITY,
     HEALTH,
     LEASES,

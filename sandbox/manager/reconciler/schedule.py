@@ -25,8 +25,8 @@ from temporalio.client import (
 )
 
 from sandbox.contract.names import MANAGER_TASK_QUEUE
-from sandbox.manager.reconcile import ReconcileWorkflow
-from sandbox.manager.reconcile_types import ReconcileParams
+from sandbox.manager.reconciler.types import ReconcileParams
+from sandbox.manager.reconciler.workflow import ReconcileWorkflow
 
 
 def schedule_id_for(pool: str) -> str:

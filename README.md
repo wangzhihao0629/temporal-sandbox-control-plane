@@ -240,13 +240,15 @@ way, and what would change in production.
 |---|---|---:|---|
 | `sandbox/contract/` | The versioned wire contract: types, activity names, errors, the exec and network policies | 240 | `sandbox/contract/types.py` |
 | `sandbox/client/` | What a workflow calls: `Sandbox.lease`, `Lease.exec`, `with_lease_retries` | 310 | `sandbox/client/sandbox.py` |
-| `sandbox/registry/` | The DynamoDB tables: VM rows, leases, jobs, events | 610 | `claim_idle` in `sandbox/registry/client.py` |
-| `sandbox/manager/` | Acquire and release, the reconciler, chaos tooling, the CLIs | 810 | `sandbox/manager/reconciler.py` |
+| `sandbox/registry/` | The DynamoDB tables: VM rows, leases, jobs, events | 580 | `claim_idle` in `sandbox/registry/client.py` |
+| `sandbox/manager/` | Acquire and release, pool policy, chaos | 210 | `sandbox/manager/activities.py` |
+| `sandbox/manager/reconciler/` | The loop that keeps each pool sized and healthy | 480 | `sandbox/manager/reconciler/core.py` |
 | `sandbox/manager/providers/` | Where VMs come from: Apple `container`, and an in-process fake | 180 | `sandbox/manager/providers/base.py` |
 | `sandbox/vm_agent/` | What runs inside a VM: jobs, heartbeat, drain, snapshots, egress rules | 1,160 | `sandbox/vm_agent/activities.py` |
-| `sandbox/orchestrator/` | The demo workflows and the CLIs that start them | 810 | `sandbox/orchestrator/workflows.py` |
+| `sandbox/orchestrator/` | The demo workflows | 590 | `sandbox/orchestrator/workflows.py` |
 | `sandbox/runner/` | The program a job runs on the VM, including the fake coding agent | 1,000 | `sandbox/runner/cli.py` |
 | `sandbox/status/` | The read API and dashboard | 530 | `sandbox/status/api.py` |
+| `sandbox/cli/` | One module per make target (`make smoke` runs `sandbox.cli.smoke`) | 360 | `sandbox/cli/common.py` |
 | `sandbox/testing/` | An in-process VM for tests | 75 | `sandbox/testing/inprocess_vm.py` |
 
 Outside `sandbox/`: `images/vm/` is the VM image (Dockerfile, entrypoint,

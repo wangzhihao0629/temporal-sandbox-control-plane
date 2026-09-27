@@ -32,7 +32,7 @@ from temporalio.client import Client
 from temporalio.service import RPCError, RPCStatusCode
 
 from sandbox.manager import chaos
-from sandbox.manager.policy_cli import merge_policy
+from sandbox.manager.policy import merge_policy
 from sandbox.manager.providers.apple_container import ProviderError
 from sandbox.objectstore import ObjectStore
 from sandbox.registry.client import Registry

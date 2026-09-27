@@ -103,7 +103,7 @@ where it left off, because that counter lives in the object store's
 and tries again, up to `max_lease_attempts` times, instead of failing outright.
 
 **The fleet heals itself.** A scheduled reconciler —
-`sandbox/manager/reconciler.py` — runs five steps every pass: health, leases,
+`sandbox/manager/reconciler/core.py` — runs five steps every pass: health, leases,
 capacity, requests, and a fleet sample. It reaps VMs a provider reports as
 truly gone, releases leases whose owning workflow vanished, and launches
 replacements to hold a pool at its policy's floor, with no human deciding any
@@ -123,7 +123,7 @@ provider, and object store the workflow and the VM agent actually use.
   `v1` every activity name carries.
 - `sandbox/orchestrator/workflows.py` — `CodingSessionDemoWorkflow`'s docstring,
   for the exact language on what losing a VM costs.
-- `sandbox/manager/reconciler.py` — the module docstring's five reconciler steps
+- `sandbox/manager/reconciler/core.py` — the module docstring's five reconciler steps
   and why a "stopped" instance is not treated as alive.
 - `docs/superpowers/specs/2026-09-03-vm-sandbox-control-plane-design.md` — §1
   for the diagnosis, §2 for where the loop lives, §17 for the rejected

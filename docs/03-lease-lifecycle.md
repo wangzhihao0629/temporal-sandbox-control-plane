@@ -85,7 +85,7 @@ stops cooperating, which the leases step checks next.
 
 ## The reconciler
 
-`sandbox/manager/reconciler.py`'s module docstring names the shape directly:
+`sandbox/manager/reconciler/core.py`'s module docstring names the shape directly:
 "five steps over one inventory snapshot, health, leases, capacity, requests,
 sample, each returning the actions it took." The `Reconciler` class it
 describes is provider- and Temporal-free — `ReconcileWorkflow` wraps each step
@@ -124,15 +124,14 @@ requests older than `abandon_after_seconds`.
 `Tunables.prod()` returns `(600, 180, 300, 600, 600, 3600)` — the same six
 knobs, wider in production.
 
-`schedule.py`'s `ensure_schedule` creates or updates a Temporal Schedule named
-`sandbox-reconcile-<pool>` with `overlap=SKIP`, so a pass never starts beside
-one still running. The manager worker calls it at startup; `make reconcile`
-triggers that schedule instead of starting a second workflow, keeping a manual
-pass under the same overlap policy. Spec §6.6 carries a deploy note worth
-repeating: the workflow and its activities ship as a unit, so after changing
-`reconcile.py` or `reconcile_activities.py`, restart the manager worker —
-Temporal's workflow sandbox re-imports workflow code from disk on every task,
-but a running worker keeps the activity code it started with.
+`reconciler/schedule.py`'s `ensure_schedule` creates or updates a Temporal
+Schedule, `sandbox-reconcile-<pool>`, with `overlap=SKIP`, so a pass never
+starts beside one still running. The manager worker calls it at startup;
+`make reconcile` triggers that schedule rather than starting a second workflow,
+so a manual pass keeps the same overlap policy. After changing
+`reconciler/workflow.py` or `activities.py`, restart the manager worker:
+Temporal re-imports workflow code on every task, but a running worker keeps
+the activity code it started with.
 
 ## Pool policy
 
@@ -153,13 +152,13 @@ change on its next pass.
   `touch_lease`, `register_vm`, and their condition expressions.
 - `sandbox/manager/activities.py` — `ManagerActivities.acquire`, `.release`.
 - `sandbox/manager/policy.py` — `PoolPolicy` and its fields.
-- `sandbox/manager/reconciler.py` — `Reconciler`, `Tunables`, `DEAD_STATES`,
+- `sandbox/manager/reconciler/core.py` — `Reconciler`, `Tunables`, `DEAD_STATES`,
   `inventory_suspect`.
-- `sandbox/manager/reconcile.py` — `ReconcileWorkflow`, the step order.
-- `sandbox/manager/reconcile_activities.py` — one activity per step.
-- `sandbox/manager/reconcile_types.py` — `Inventory`, `Action`,
+- `sandbox/manager/reconciler/workflow.py` — `ReconcileWorkflow`, the step order.
+- `sandbox/manager/reconciler/activities.py` — one activity per step.
+- `sandbox/manager/reconciler/types.py` — `Inventory`, `Action`,
   `ReconcileReport`.
-- `sandbox/manager/schedule.py` — `ensure_schedule`, the schedule and overlap
+- `sandbox/manager/reconciler/schedule.py` — `ensure_schedule`, the schedule and overlap
   policy.
 
 ## Where this maps in production
@@ -167,8 +166,8 @@ change on its next pass.
 `schema.py` says tables are "created by Terraform" in production, with
 `create_tables` reserved for local runs and tests — the same DynamoDB API
 either way, only the endpoint changes. `client.py` is "identical," with the VM
-agent's write access narrowed to its own `vm_id` by IAM. `reconciler.py` is
-"identical; the tunables grow and the provider is EC2." `reconcile.py` runs "on
+agent's write access narrowed to its own `vm_id` by IAM. `reconciler/core.py` is
+"identical; the tunables grow and the provider is EC2." `workflow.py` runs "on
 a one-minute schedule" instead of every fifteen seconds.
 
 ## Try it

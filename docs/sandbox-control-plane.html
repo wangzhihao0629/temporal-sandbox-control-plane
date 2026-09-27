@@ -315,12 +315,12 @@ stateDiagram-v2
       <div class="fixnote">
         <span class="tag">Corrected</span>
         <b><code>draining</code> comes from the agent's own shutdown handler</b>, not from anything chaos-specific — <code>make chaos-stop</code> just sends the SIGTERM that trips it.
-        <span class="cite">sandbox/vm_agent/runtime.py:108–111 · manager/chaos.py:3–4</span>
+        <span class="cite">sandbox/vm_agent/runtime.py:108–111 · manager/chaos.py</span>
       </div>
       <div class="fixnote">
         <span class="tag">Corrected</span>
         <b>"Swept after 600s" is the local/demo profile only.</b> <code>Tunables</code> sets 600s for local, 3600s for prod, and 2s for test.
-        <span class="cite">sandbox/manager/reconciler.py:65,69,73</span>
+        <span class="cite">sandbox/manager/reconciler/core.py:65,69,73</span>
       </div>
     </div>
   </section>
@@ -335,7 +335,7 @@ stateDiagram-v2
     </ul>
     <div class="fixnote">
       <span class="tag">Corrected</span>
-      The run-it-yourself target is <code>make reconcile</code> (which invokes <code>sandbox.manager.reconcile_once</code>) — there is no target literally named <code>reconcile-once</code>.
+      The run-it-yourself target is <code>make reconcile</code> (which invokes <code>sandbox.cli.reconcile</code>) — there is no target literally named <code>reconcile-once</code>.
       <span class="cite">Makefile:83–84</span>
     </div>
   </section>

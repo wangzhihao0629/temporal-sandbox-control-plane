@@ -7,15 +7,15 @@ import pytest
 from temporalio.client import ScheduleOverlapPolicy
 from temporalio.worker import Worker
 
+from sandbox.cli.reconcile import run_once
 from sandbox.contract.names import MANAGER_TASK_QUEUE
 from sandbox.manager.activities import ManagerActivities
 from sandbox.manager.providers.fake import FakeProvider
-from sandbox.manager.reconcile import ReconcileWorkflow
-from sandbox.manager.reconcile_activities import ReconcileActivities
-from sandbox.manager.reconcile_once import run_once
-from sandbox.manager.reconcile_types import ReconcileParams
-from sandbox.manager.reconciler import Reconciler, Tunables
-from sandbox.manager.schedule import ensure_schedule
+from sandbox.manager.reconciler.activities import ReconcileActivities
+from sandbox.manager.reconciler.core import Reconciler, Tunables
+from sandbox.manager.reconciler.schedule import ensure_schedule
+from sandbox.manager.reconciler.types import ReconcileParams
+from sandbox.manager.reconciler.workflow import ReconcileWorkflow
 from tests.integration.client_workflows import ExerciseParams, ExerciseWorkflow
 
 

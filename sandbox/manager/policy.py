@@ -39,3 +39,21 @@ class PoolPolicy:
 
     def launch_spec(self) -> LaunchSpec:
         return LaunchSpec(image=self.image, cpus=self.cpus, memory=self.memory)
+
+
+def merge_policy(current: dict, min_idle, max, image) -> dict:
+    """The stored policy with any given knob replaced; refuses a floor above the ceiling.
+
+    Shared by `make policy` and the dashboard's policy endpoint, so both enforce
+    the same rule.
+    """
+    merged = {
+        "min_idle": int(min_idle) if min_idle is not None else int(current["min_idle"]),
+        "max": int(max) if max is not None else int(current["max"]),
+        "image": image if image is not None else current["image"],
+        "cpus": int(current.get("cpus", 2)),
+        "memory": current.get("memory", "2048M"),
+    }
+    if merged["min_idle"] > merged["max"]:
+        raise ValueError(f"min_idle {merged['min_idle']} exceeds max {merged['max']}")
+    return merged

@@ -9,7 +9,7 @@ workflow keeps the schedule's overlap policy in force, so a manual pass can
 never run beside the scheduled one and race it over the same fleet.
 Production: not deployed; production always runs on the Schedule.
 
-Usage: uv run python -m sandbox.manager.reconcile_once
+Usage: uv run python -m sandbox.cli.reconcile
 """
 
 import asyncio
@@ -19,8 +19,9 @@ from temporalio.client import Client, ScheduleOverlapPolicy
 from temporalio.service import RPCError, RPCStatusCode
 
 from sandbox import envfile
-from sandbox.manager.reconcile_types import ReconcileReport
-from sandbox.manager.schedule import schedule_id_for
+from sandbox.cli import common
+from sandbox.manager.reconciler.schedule import schedule_id_for
+from sandbox.manager.reconciler.types import ReconcileReport
 
 WAIT_SECONDS = 60
 POLL_SECONDS = 0.5
@@ -90,10 +91,7 @@ async def run_once(client: Client, pool: str) -> ReconcileReport:
 
 async def main() -> None:
     envfile.load()
-    client = await Client.connect(
-        os.environ.get("TEMPORAL_ADDRESS", "127.0.0.1:7233"),
-        namespace=os.environ.get("TEMPORAL_NAMESPACE", "default"),
-    )
+    client = await common.connect()
     report = await run_once(client, os.environ.get("SANDBOX_POOL", "demo"))
     for action in report.actions:
         print(f"  {action.kind:<20} {action.vm_id:<16} {action.detail}")

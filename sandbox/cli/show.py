@@ -7,7 +7,7 @@ Temporal UI. It is the dashboard before there is a dashboard.
 Production: the status API serves the same join; this stays as the fallback for
 when the API is what is broken.
 
-Usage: uv run python -m sandbox.registry.show
+Usage: uv run python -m sandbox.cli.show
 """
 
 from sandbox import envfile

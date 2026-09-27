@@ -7,7 +7,7 @@ computed here rather than baked into the image, so the same image boots against
 any stack.
 Production: the reconciler's scale-out decides this, and the provider is an ASG.
 
-Usage: uv run python -m sandbox.manager.launch_vm [pool]
+Usage: uv run python -m sandbox.cli.vm [pool]
 """
 
 import sys

@@ -7,9 +7,9 @@ from datetime import datetime, timedelta
 import pytest
 
 from sandbox.manager.providers.base import LaunchSpec, ProviderInstance
-from sandbox.manager.reconcile_activities import ReconcileActivities
-from sandbox.manager.reconcile_types import ReconcileParams
-from sandbox.manager.reconciler import Reconciler, Tunables
+from sandbox.manager.reconciler.activities import ReconcileActivities
+from sandbox.manager.reconciler.core import Reconciler, Tunables
+from sandbox.manager.reconciler.types import ReconcileParams
 from sandbox.timeutil import now, now_iso, to_iso
 
 

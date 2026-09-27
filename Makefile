@@ -28,16 +28,16 @@ status:
 	$(UV) run python -m sandbox.status.api
 
 smoke:
-	$(UV) run python -m sandbox.orchestrator.run_smoke
+	$(UV) run python -m sandbox.cli.smoke
 
 vm:
-	$(UV) run python -m sandbox.manager.launch_vm
+	$(UV) run python -m sandbox.cli.vm
 
 vms:
 	container ls --all
 
 show:
-	$(UV) run python -m sandbox.registry.show
+	$(UV) run python -m sandbox.cli.show
 
 .PHONY: image
 
@@ -64,7 +64,7 @@ demo:
 	SCENARIO=$(SCENARIO) ./scripts/demo.sh
 
 session:
-	$(UV) run python -m sandbox.orchestrator.run_session \
+	$(UV) run python -m sandbox.cli.session \
 	  $(if $(SCENARIO),--scenario $(SCENARIO)) \
 	  $(if $(PROMPT),--prompt "$(PROMPT)") \
 	  $(if $(TURNS),--max-turns $(TURNS)) \
@@ -73,25 +73,25 @@ session:
 	  $(if $(STEP_TIMEOUT),--step-timeout $(STEP_TIMEOUT))
 
 gobuild:
-	$(UV) run python -m sandbox.orchestrator.run_gobuild $(foreach a,$(ARGS),--arg=$(a))
+	$(UV) run python -m sandbox.cli.gobuild $(foreach a,$(ARGS),--arg=$(a))
 
 chaos-kill:
-	$(UV) run python -m sandbox.manager.chaos kill $(VM)
+	$(UV) run python -m sandbox.cli.chaos kill $(VM)
 
 chaos-stop:
-	$(UV) run python -m sandbox.manager.chaos stop $(VM)
+	$(UV) run python -m sandbox.cli.chaos stop $(VM)
 
 chaos-delete:
-	$(UV) run python -m sandbox.manager.chaos delete $(VM)
+	$(UV) run python -m sandbox.cli.chaos delete $(VM)
 
 policy:
-	$(UV) run python -m sandbox.manager.policy_cli $(if $(MIN_IDLE),--min-idle $(MIN_IDLE)) $(if $(MAX),--max $(MAX))
+	$(UV) run python -m sandbox.cli.policy $(if $(MIN_IDLE),--min-idle $(MIN_IDLE)) $(if $(MAX),--max $(MAX))
 
 reconcile:
-	$(UV) run python -m sandbox.manager.reconcile_once
+	$(UV) run python -m sandbox.cli.reconcile
 
 hold:
-	$(UV) run python -m sandbox.orchestrator.run_hold --seconds $(SECONDS)
+	$(UV) run python -m sandbox.cli.hold --seconds $(SECONDS)
 
 terminate:
-	$(UV) run python -m sandbox.orchestrator.terminate $(WF)
+	$(UV) run python -m sandbox.cli.terminate $(WF)

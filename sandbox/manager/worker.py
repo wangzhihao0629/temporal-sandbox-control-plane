@@ -24,10 +24,10 @@ from temporalio.worker import Worker
 from sandbox import envfile
 from sandbox.contract.names import MANAGER_TASK_QUEUE
 from sandbox.manager.activities import ManagerActivities
-from sandbox.manager.reconcile import ReconcileWorkflow
-from sandbox.manager.reconcile_activities import ReconcileActivities
-from sandbox.manager.reconciler import Reconciler, Tunables
-from sandbox.manager.schedule import ensure_schedule, schedule_id_for
+from sandbox.manager.reconciler.activities import ReconcileActivities
+from sandbox.manager.reconciler.core import Reconciler, Tunables
+from sandbox.manager.reconciler.schedule import ensure_schedule, schedule_id_for
+from sandbox.manager.reconciler.workflow import ReconcileWorkflow
 from sandbox.registry.client import Registry
 
 

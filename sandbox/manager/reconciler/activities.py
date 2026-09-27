@@ -19,7 +19,8 @@ from temporalio import activity
 from temporalio.client import Client
 from temporalio.service import RPCError, RPCStatusCode
 
-from sandbox.manager.reconcile_types import (
+from sandbox.manager.reconciler.core import Reconciler
+from sandbox.manager.reconciler.types import (
     CAPACITY,
     HEALTH,
     LEASES,
@@ -29,7 +30,6 @@ from sandbox.manager.reconcile_types import (
     Inventory,
     ReconcileParams,
 )
-from sandbox.manager.reconciler import Reconciler
 
 
 class ReconcileActivities:

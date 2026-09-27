@@ -110,9 +110,9 @@ bad or vanished summary drops out of the list instead of breaking it.
 - `sandbox/status/static/index.html` — the page, its polling loop, and the
   SSE handlers.
 - `sandbox/status/__init__.py` — what the process serves, in one paragraph.
-- `sandbox/manager/chaos.py` — `apply`, `ACTIONS`, shared with
+- `sandbox/cli/chaos.py` — `apply`, `ACTIONS`, shared with
   `make chaos-kill`.
-- `sandbox/manager/policy_cli.py` — `merge_policy`, the `min_idle <= max`
+- `sandbox/cli/policy.py` — `merge_policy`, the `min_idle <= max`
   check `PUT /api/pool` reuses.
 - `tests/status/test_api.py` — the endpoint and degrade-path tests.
 - `tests/status/test_events.py` — the replay and `Last-Event-ID` tests.

@@ -6,7 +6,7 @@ Why: `make session` and `make demo` are how a reader runs the demo; the link is
 what they watch while it runs.
 Production: a CLI or UI action that starts a workflow.
 
-Usage: uv run python -m sandbox.orchestrator.run_session [--scenario NAME]
+Usage: uv run python -m sandbox.cli.session [--scenario NAME]
        [--prompt TEXT] [--max-turns N] [--turn-seconds N] [--agent fake|claude]
        [--session-id ID]
 """
@@ -17,17 +17,16 @@ import os
 import sys
 import uuid
 
-from temporalio.client import Client
-
 from sandbox import envfile
-from sandbox.contract.names import ORCHESTRATOR_TASK_QUEUE, WORKSPACE_ROOT
+from sandbox.cli import common
+from sandbox.contract.names import ORCHESTRATOR_TASK_QUEUE
 from sandbox.objectstore import ObjectStore
 from sandbox.orchestrator.workflows import CodingSessionDemoWorkflow, CodingSessionParams
 from sandbox.runner.scenarios import SCENARIOS
 
 
 def _args(argv):
-    p = argparse.ArgumentParser(prog="run_session")
+    p = argparse.ArgumentParser(prog="session")
     p.add_argument("--scenario", default=os.environ.get("SCENARIO", ""), choices=("", *SCENARIOS))
     p.add_argument("--prompt", default="Add a multiply function to calc with a test")
     p.add_argument("--max-turns", type=int, default=3)
@@ -42,18 +41,8 @@ def _args(argv):
 async def main(argv=None) -> int:
     envfile.load()
     args = _args(sys.argv[1:] if argv is None else argv)
-    runner_uri = os.environ.get("RUNNER_URI", "")
-    runner_sha = os.environ.get("RUNNER_SHA256", "")
-    if not runner_uri or not runner_sha:
-        print(
-            "RUNNER_URI / RUNNER_SHA256 missing from .env: run `make artifact` first",
-            file=sys.stderr,
-        )
-        return 2
-    namespace = os.environ.get("TEMPORAL_NAMESPACE", "default")
-    address = os.environ.get("TEMPORAL_ADDRESS", "127.0.0.1:7233")
-    client = await Client.connect(address, namespace=namespace)
-    ui = os.environ.get("TEMPORAL_UI", "http://localhost:8233")
+    runner_uri, runner_sha = common.runner_artifact()
+    client = await common.connect()
     workflow_id = f"session-{args.session_id}"
     params = CodingSessionParams(
         session_id=args.session_id,
@@ -66,12 +55,10 @@ async def main(argv=None) -> int:
         turn_timeout_seconds=args.turn_timeout,
         step_timeout_seconds=args.step_timeout,
         agent=args.agent,
-        pool=os.environ.get("SANDBOX_POOL", "demo"),
-        profile=os.environ.get("SANDBOX_PROFILE", "local"),
-        workspace_root=os.environ.get("SANDBOX_WORKSPACE_ROOT", WORKSPACE_ROOT),
+        **common.placement(),
     )
     print(f"session  {args.session_id}  scenario {args.scenario or '(from prompt)'}")
-    print(f"watch:   {ui}/namespaces/{namespace}/workflows/{workflow_id}")
+    print(f"watch:   {common.watch_url(workflow_id)}")
     result = await client.execute_workflow(
         CodingSessionDemoWorkflow.run, params, id=workflow_id, task_queue=ORCHESTRATOR_TASK_QUEUE
     )

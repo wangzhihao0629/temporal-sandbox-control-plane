@@ -7,27 +7,15 @@ takes effect within one interval — the two knobs a demo needs to watch top-up
 and scale-in react without editing the registry by hand.
 Production: the dashboard's policy endpoint does the same write.
 
-Usage: uv run python -m sandbox.manager.policy_cli [--pool demo] [--min-idle N]
+Usage: uv run python -m sandbox.cli.policy [--pool demo] [--min-idle N]
     [--max N] [--image I]
 """
 
 import argparse
 
 from sandbox import envfile
+from sandbox.manager.policy import merge_policy
 from sandbox.registry.client import Registry
-
-
-def merge_policy(current: dict, min_idle, max, image) -> dict:
-    merged = {
-        "min_idle": int(min_idle) if min_idle is not None else int(current["min_idle"]),
-        "max": int(max) if max is not None else int(current["max"]),
-        "image": image if image is not None else current["image"],
-        "cpus": int(current.get("cpus", 2)),
-        "memory": current.get("memory", "2048M"),
-    }
-    if merged["min_idle"] > merged["max"]:
-        raise ValueError(f"min_idle {merged['min_idle']} exceeds max {merged['max']}")
-    return merged
 
 
 def main() -> None:

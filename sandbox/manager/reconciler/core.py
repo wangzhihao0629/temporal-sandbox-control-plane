@@ -23,7 +23,7 @@ from dataclasses import asdict, dataclass
 
 from sandbox.manager.launch import new_vm_id, vm_environment
 from sandbox.manager.policy import PoolPolicy
-from sandbox.manager.reconcile_types import Action, Inventory, ReconcileReport
+from sandbox.manager.reconciler.types import Action, Inventory, ReconcileReport
 from sandbox.registry.client import Registry
 from sandbox.timeutil import now, parse_iso, to_iso
 

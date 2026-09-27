@@ -65,9 +65,9 @@ keeps serving traffic until each phase is ready:
   and wipes it. Production would close it with a lease id recorded per write,
   or the object store's own conditional put.
 - **The capacity step's timeout assumes a pool max of five.**
-  `sandbox/manager/reconcile.py`'s `_CAPACITY_STEP` sets a 16-minute
+  `sandbox/manager/reconciler/workflow.py`'s `_CAPACITY_STEP` sets a 16-minute
   start-to-close from `60 + 5 * 180` seconds — one `container ls` plus five
-  launches — with the 5 written in, not read from `policy.max`. Raise `max`
+  launches — the 5 written in, not read from `policy.max`. Raise `max`
   past five and a pass that fills the pool can outlive its activity, retry, and
   launch beside a `container run` still going. Plan 3's self-review parks
   deriving that budget from the policy.
@@ -113,7 +113,7 @@ the shortcut.
   relative to the lease retry loop.
 - `sandbox/registry/client.py`, `sandbox/timeutil.py` — `emit`, `ts_ulid`,
   `to_iso`.
-- `sandbox/bootstrap.py`, `sandbox/manager/reconciler.py` — the seeded pool
+- `sandbox/bootstrap.py`, `sandbox/manager/reconciler/core.py` — the seeded pool
   policy and the capacity step that spends it.
 - `sandbox/status/api.py` — `provider_cache_seconds`.
 - `tests/status/test_events.py` — the comment on same-millisecond ordering.
