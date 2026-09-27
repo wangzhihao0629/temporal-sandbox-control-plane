@@ -70,6 +70,9 @@ VM_CHECK="$(container run --rm alpine:3.20 wget -q -S -O /dev/null -T 5 "http://
 if [[ "$VM_CHECK" != *"HTTP/"* ]]; then
   echo "==> ERROR: a VM could not reach the host moto server at ${GATEWAY}:${MOTO_PORT}" >&2
   echo "    got: $(tail -1 <<<"$VM_CHECK")" >&2
+  if /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>/dev/null | grep -q enabled; then
+    echo "    The macOS firewall is on and may be dropping it: see \"macOS firewall\" in README.md." >&2
+  fi
   exit 1
 fi
 

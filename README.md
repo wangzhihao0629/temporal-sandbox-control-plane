@@ -158,30 +158,60 @@ standalone page with the same diagrams in more detail — open it in a browser.
 
 ## Requirements
 
-- **macOS on Apple Silicon** — the VM layer uses Apple's `container` CLI
-  (Homebrew: `brew install container`), which is what actually requires the
-  silicon and the OS version.
-- The [`temporal`](https://docs.temporal.io/cli) CLI.
-- [`uv`](https://docs.astral.sh/uv/) and Python 3.12+.
+- **macOS on Apple Silicon.** The VMs are Apple [`container`](https://github.com/apple/container)
+  VMs, which is what requires the silicon and a recent macOS.
+- Three command-line tools, all from Homebrew:
 
-`make bootstrap` checks for the first two and fails with an install hint if
-either is missing.
+  ```sh
+  brew install container temporal uv
+  ```
+
+  `uv` fetches Python 3.12 itself if you don't have it. `make bootstrap`
+  checks for `container` and `temporal` and says what to install if either is
+  missing.
+- About 2 GB of disk for the VM image, and network access for the first
+  `make image` (it pulls Ubuntu) and for `make gobuild` (it clones from GitHub).
+
+### macOS firewall
+
+The VMs reach two services on your Mac: Temporal and the moto stand-in for
+DynamoDB and S3. If the macOS firewall is on, it silently drops those
+connections, and `make up` stops with
+`a VM could not reach the host moto server`. Allow the two programs through it
+once:
+
+```sh
+PY="$(uv run python -c 'import os, sys; print(os.path.realpath(sys.executable))')"
+TEMPORAL="$(realpath "$(command -v temporal)")"
+for bin in "$PY" "$TEMPORAL"; do
+  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$bin" --unblockapp "$bin"
+done
+```
+
+Then `make down && make up`.
 
 ## Quick start
 
 ```sh
 make bootstrap   # uv sync; checks for the temporal and container CLIs
 make up          # container system, Temporal dev server, moto, .env
-make image       # builds the sandbox-vm:dev image (slow the first time)
+make image       # builds the sandbox-vm:dev image (a few minutes the first time)
 make artifact    # packages and uploads the turn runner
-make workers     # starts the manager, orchestrator, and status API
-make demo        # runs a smoke check, then one coding session
+make workers     # starts the manager, orchestrator, and status API — and keeps running
 ```
 
-Open **http://localhost:8600** for the dashboard and
+`make workers` stays in the foreground and streams the workers' logs, so leave
+it running and use a **second terminal** for the rest:
+
+```sh
+make demo        # waits for two VMs to boot, runs a smoke check, then one coding session
+```
+
+The first run takes a minute or two while the reconciler boots the pool's
+first two VMs. Open **http://localhost:8600** for the dashboard and
 **http://localhost:8233** for the Temporal UI while it runs.
 
-Tear down with `make down` (after stopping `make workers` with Ctrl-C).
+Tear down by stopping `make workers` with Ctrl-C, then `make down`.
 
 ## Try it further
 
