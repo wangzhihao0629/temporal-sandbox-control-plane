@@ -95,6 +95,34 @@ class ObjectStore:
                 uris.append(f"s3://{bucket}/{obj['Key']}")
         return uris
 
+    def browse(self, bucket: str, prefix: str = "", limit: int = 500) -> dict:
+        """One level of a bucket, the way a file browser shows a folder: the
+        sub-prefixes under `prefix`, and the objects directly in it."""
+        resp = self._s3.list_objects_v2(
+            Bucket=bucket, Prefix=prefix, Delimiter="/", MaxKeys=limit
+        )
+        return {
+            "prefixes": [p["Prefix"] for p in resp.get("CommonPrefixes", [])],
+            "objects": [
+                {
+                    "key": o["Key"],
+                    "size": o["Size"],
+                    "modified": o["LastModified"].isoformat(),
+                }
+                for o in resp.get("Contents", [])
+            ],
+            "truncated": resp.get("IsTruncated", False),
+        }
+
+    def usage(self, bucket: str) -> tuple[int, int]:
+        """How many objects the bucket holds, and their total size in bytes."""
+        count = size = 0
+        for page in self._s3.get_paginator("list_objects_v2").paginate(Bucket=bucket):
+            for obj in page.get("Contents", []):
+                count += 1
+                size += obj["Size"]
+        return count, size
+
     def put_json(self, uri: str, obj) -> None:
         self.put_bytes(uri, json.dumps(obj, indent=2).encode(), content_type="application/json")
 

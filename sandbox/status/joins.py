@@ -11,6 +11,7 @@ rows so the header is never blank.
 Production: identical.
 """
 
+import re
 from datetime import datetime, timedelta
 
 from sandbox.timeutil import parse_iso, to_iso
@@ -146,8 +147,30 @@ def fleet_view(sample: dict | None, rows: list[dict], pending: int, policy: dict
     return {"source": "rows", "sample_at": None, "counts": counts, "policy": policy_view}
 
 
+_RUNNER_PREFIX = re.compile(r"^/bin/sh \S*/bin/runner\b")
+_ENVELOPE_ARG = re.compile(r" --envelope-uri \S+")
+
+
+def command_view(argv_summary: str) -> str:
+    """The command as a reader wants it: `runner test --workspace ...`, not the
+    content-addressed artifact path, and without the envelope URI every step has."""
+    return _ENVELOPE_ARG.sub("", _RUNNER_PREFIX.sub("runner", argv_summary or ""))
+
+
+def event_view(event: dict) -> dict:
+    return {
+        "ts": event["ts_ulid"].split("#", 1)[0],
+        "type": event.get("type", ""),
+        "actor": event.get("actor", ""),
+        "vm_id": event.get("vm_id", ""),
+        "message": event.get("message", ""),
+        "details": event.get("details", {}),
+    }
+
+
 def job_view(row: dict) -> dict:
     view = {key: row.get(key, "") for key in JOB_KEYS}
+    view["command"] = command_view(row.get("argv_summary", ""))
     view["exit_code"] = row.get("exit_code")
     view["duration_seconds"] = row.get("duration_seconds")
     return view

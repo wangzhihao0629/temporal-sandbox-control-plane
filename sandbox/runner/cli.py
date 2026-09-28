@@ -137,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         envelope = envelopes.broken(args.command, f"{type(e).__name__}: {e}")
     store.put_json(args.envelope_uri, envelope.to_dict())
     print(f"[runner] {args.command}: {'ok' if envelope.ok else 'broken'}", flush=True)
+    print("\n".join(envelopes.describe(envelope)), flush=True)
     return 0 if envelope.ok else 1
 
 

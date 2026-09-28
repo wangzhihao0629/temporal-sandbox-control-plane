@@ -474,6 +474,27 @@ class Registry:
             ExpressionAttributeValues=values,
         )
 
+    def table_names(self) -> list[str]:
+        return [t.name for t in (self.vms, self.jobs, self.events, self.requests)]
+
+    def scan(self, table_name: str, limit: int = 50) -> dict:
+        """A sample of one registry table's items and its total count, for browsing.
+        Only the registry's own tables can be named."""
+        table = {t.name: t for t in (self.vms, self.jobs, self.events, self.requests)}.get(
+            table_name
+        )
+        if table is None:
+            raise KeyError(f"unknown table {table_name!r}")
+        count, kwargs = 0, {"Select": "COUNT"}
+        while True:
+            page = table.scan(**kwargs)
+            count += page["Count"]
+            if "LastEvaluatedKey" not in page:
+                break
+            kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+        items = table.scan(Limit=limit).get("Items", [])
+        return {"table": table_name, "count": count, "items": [_clean(i) for i in items]}
+
     def list_jobs(self, vm_id=None, limit=50):
         if vm_id:
             items = _query_all(

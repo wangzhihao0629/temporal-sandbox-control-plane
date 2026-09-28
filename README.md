@@ -25,8 +25,11 @@ standing in for DynamoDB and S3, Apple `container` VMs, and a live dashboard.
   and back in after a cooldown — all through conditional writes on one
   DynamoDB row, so two managers can never win the same lease.
 - **Everything is watchable.** A dashboard joins the registry, the VM
-  provider, Temporal, and S3 into one page with a live event feed; the
-  Temporal UI shows every activity on its queue.
+  provider, Temporal, and S3 into one page with a live event feed. Every
+  command's log shows what it found (the failing test, the built program's
+  output), each VM opens to its timeline and console, and a storage browser
+  shows what is in S3 and DynamoDB. The Temporal UI shows every activity on
+  its queue.
 - **A real build, snapshotted and restored elsewhere.** Clone a Go repository
   from GitHub, edit it, compile and run it in one VM, snapshot the result, and
   run the restored binary on a second VM without rebuilding.

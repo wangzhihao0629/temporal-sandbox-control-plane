@@ -34,7 +34,7 @@ from temporalio.service import RPCError, RPCStatusCode
 from sandbox.manager import chaos
 from sandbox.manager.policy import merge_policy
 from sandbox.manager.providers.apple_container import ProviderError
-from sandbox.objectstore import ObjectStore
+from sandbox.objectstore import BUCKETS, ObjectStore
 from sandbox.registry.client import Registry
 from sandbox.status import joins
 from sandbox.timeutil import now
@@ -255,15 +255,7 @@ async def sessions(deps: Deps, limit: int) -> list[dict]:
 
 
 def _control_frame(event: dict) -> str:
-    ts, _, _ = event["ts_ulid"].partition("#")
-    payload = {
-        "ts": ts,
-        "type": event.get("type", ""),
-        "actor": event.get("actor", ""),
-        "vm_id": event.get("vm_id", ""),
-        "message": event.get("message", ""),
-        "details": event.get("details", {}),
-    }
+    payload = joins.event_view(event)
     return f"id: {event['ts_ulid']}\nevent: control\ndata: {json.dumps(payload)}\n\n"
 
 
@@ -373,6 +365,66 @@ def create_app(deps: Deps) -> FastAPI:
         except FileNotFoundError:
             raise HTTPException(404, f"no {stream} log uploaded yet") from None
         return joins.tail_text(data, tail)
+
+    @app.get("/api/vms/{vm_id}/events")
+    async def api_vm_events(vm_id: str, limit: int = Query(100, ge=1, le=500)):
+        rows = await asyncio.to_thread(deps.registry.recent_events, 500)
+        return [joins.event_view(r) for r in rows if r.get("vm_id") == vm_id][:limit]
+
+    @app.get("/api/vms/{vm_id}/log", response_class=PlainTextResponse)
+    async def api_vm_log(vm_id: str, tail: int = Query(300, ge=1, le=5000)):
+        logs = getattr(deps.provider, "logs", None)
+        if logs is None:
+            raise HTTPException(501, "this provider cannot read a VM's own console")
+        row = await asyncio.to_thread(deps.registry.get_vm, vm_id)
+        if row is None:
+            raise HTTPException(404, f"no VM {vm_id}")
+        try:
+            return await asyncio.to_thread(logs, row.get("provider_ref", vm_id), tail)
+        except Exception as e:  # the machine may be gone; say so rather than 500
+            raise HTTPException(404, f"no console for {vm_id}: {e}") from None
+
+    @app.get("/api/storage")
+    async def api_storage():
+        buckets = []
+        for name in BUCKETS:
+            count, size = await asyncio.to_thread(deps.store.usage, name)
+            buckets.append({"name": name, "objects": count, "bytes": size})
+        tables = []
+        for name in deps.registry.table_names():
+            scanned = await asyncio.to_thread(deps.registry.scan, name, 1)
+            tables.append({"name": name, "items": scanned["count"]})
+        return {"buckets": buckets, "tables": tables}
+
+    @app.get("/api/storage/s3")
+    async def api_storage_s3(bucket: str, prefix: str = ""):
+        _known_bucket(bucket)
+        return await asyncio.to_thread(deps.store.browse, bucket, prefix)
+
+    @app.get("/api/storage/s3/object", response_class=PlainTextResponse)
+    async def api_storage_s3_object(
+        bucket: str, key: str, tail: int = Query(262144, ge=1, le=4_000_000)
+    ):
+        _known_bucket(bucket)
+        try:
+            data = await asyncio.to_thread(deps.store.get_bytes, f"s3://{bucket}/{key}")
+        except FileNotFoundError:
+            raise HTTPException(404, f"no object s3://{bucket}/{key}") from None
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError:
+            return f"(binary, {len(data)} bytes — a tarball, bundle, or artifact)"
+        return joins.tail_text(data, tail)
+
+    @app.get("/api/storage/dynamodb")
+    async def api_storage_dynamodb(table: str, limit: int = Query(50, ge=1, le=500)):
+        if table not in deps.registry.table_names():
+            raise HTTPException(400, f"not a registry table: {table}")
+        return await asyncio.to_thread(deps.registry.scan, table, limit)
+
+    def _known_bucket(bucket: str) -> None:
+        if bucket not in BUCKETS:
+            raise HTTPException(400, f"not one of this system's buckets: {bucket}")
 
     @app.get("/api/sessions")
     async def api_sessions(limit: int = Query(20, ge=1, le=200)):

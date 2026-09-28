@@ -17,8 +17,15 @@ sample or were counted from rows (`renderCounters`); the counters row shows
 Total, Idle, Leased, Booting, Draining, Dead, and Pending. The VMs table adds
 heartbeat age, provider state, agent version, the current job, and the owner
 workflow's id linked to the Temporal UI with its live status next to it. The
-events panel prepends each SSE frame, capped at 200 rows in the DOM. Jobs
-shows the last 30 job rows with a log button per row; Sessions shows recent
+events panel prepends each SSE frame, capped at 200 rows in the DOM, except
+`fleet_sample`, which only drives the counters and sparkline. Jobs shows the
+last 30 job rows with a log button per row, and the command as
+`runner test --workspace ...` (`joins.command_view`), not the artifact path; every
+runner step ends its log with its result, via `envelopes.describe`, so a test
+step's log names the failing tests. Clicking a VM opens its timeline, the
+commands it ran, and its own console (`/api/vms/{vm_id}/log`, when the
+provider has `logs`). Storage lists the four buckets and four tables with
+counts, browsable down to one object's text or one table's items. Sessions shows recent
 `summary.json` objects — turns, tests passed over total, lint count, cost,
 the VM ids, and a link to the owning workflow. A canvas sparkline plots idle,
 leased, and pending over the last 15 minutes from `/api/samples`.
@@ -46,6 +53,10 @@ own process (`Procfile`'s `status` line, `make status` locally).
 | `GET /api/jobs/{vm_id}/{job_id}/log` | the tail of `stdout.log` or `stderr.log` from the object store |
 | `GET /api/sessions?limit=` | `summary.json` objects under `s3://sandbox-out/`, newest first |
 | `GET /api/samples?minutes=` | `fleet_sample` events for the sparkline |
+| `GET /api/vms/{vm_id}/events` / `.../log` | one VM's events; its console, if the provider can read it |
+| `GET /api/storage` | object and item counts per bucket and table |
+| `GET /api/storage/s3?bucket=&prefix=` / `.../object?bucket=&key=` | one folder level; one object as text |
+| `GET /api/storage/dynamodb?table=` | a table's items; only the registry's own tables and buckets, read-only |
 | `GET /api/events` | the SSE stream |
 | `POST /api/chaos/{vm_id}/{kill\|stop\|delete}` | demo only |
 | `PUT /api/pool/{pool}` | demo only, edits `min_idle`/`max` |
@@ -106,13 +117,13 @@ bad or vanished summary drops out of the list instead of breaking it.
 - `sandbox/status/api.py` — `Deps`, `create_app`, `event_stream`,
   `TemporalOwnerStatus`, `_instances`, `_demo_only`.
 - `sandbox/status/joins.py` — `fleet_view`, `vm_view`, `lease_view`,
-  `session_view`, `sample_series`.
+  `session_view`, `sample_series`, `event_view`, `command_view`.
 - `sandbox/status/static/index.html` — the page, its polling loop, and the
   SSE handlers.
 - `sandbox/status/__init__.py` — what the process serves, in one paragraph.
-- `sandbox/cli/chaos.py` — `apply`, `ACTIONS`, shared with
+- `sandbox/manager/chaos.py` — `apply`, `ACTIONS`, shared with
   `make chaos-kill`.
-- `sandbox/cli/policy.py` — `merge_policy`, the `min_idle <= max`
+- `sandbox/manager/policy.py` — `merge_policy`, the `min_idle <= max`
   check `PUT /api/pool` reuses.
 - `tests/status/test_api.py` — the endpoint and degrade-path tests.
 - `tests/status/test_events.py` — the replay and `Last-Event-ID` tests.

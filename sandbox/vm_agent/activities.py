@@ -227,7 +227,7 @@ class VmActivities:
             self.cfg.vm_id,
             spec.job_id,
             status="running",
-            argv_summary=" ".join(spec.argv)[:200],
+            argv_summary=" ".join(spec.argv)[:1000],
             owner_workflow_id=info.workflow_id,
             started_at=job.started_at,
             log_uri=spec.log_uri,

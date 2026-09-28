@@ -150,6 +150,39 @@ _BY_KIND = {
 }
 
 
+def describe(envelope) -> list[str]:
+    """The envelope as indented lines for the job's own log.
+
+    The envelope goes to the object store for the workflow to read; these lines
+    go to stdout, so whoever opens the job's log — on the dashboard, or in the
+    object store — sees what the step found without fetching the JSON.
+    """
+    fields = envelope.to_dict()
+    if not fields["ok"]:
+        # A step that broke has only its error to report; the rest are defaults.
+        fields = {"error": fields["error"]}
+    lines = []
+    for key, value in fields.items():
+        if key in ("ok", "kind") or value in ("", [], None):
+            continue
+        if isinstance(value, list):
+            lines.append(f"  {key}:")
+            for item in value:
+                fields = item if isinstance(item, dict) else {"value": item}
+                first = True
+                for field, text in fields.items():
+                    for i, line in enumerate(str(text).splitlines() or [""]):
+                        prefix = "    - " if first else "      "
+                        label = f"{field}: " if i == 0 else " " * (len(field) + 2)
+                        lines.append(f"{prefix}{label}{line}")
+                        first = False
+        else:
+            text = str(value).splitlines() or [""]
+            lines.append(f"  {key}: {text[0]}")
+            lines += [f"    {line}" for line in text[1:]]
+    return lines
+
+
 def broken(kind: str, error: str):
     """The envelope a step writes when it raised instead of finishing."""
     return _BY_KIND[kind](ok=False, error=truncate(error))

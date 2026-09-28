@@ -168,3 +168,10 @@ def test_run_cli_raises_provider_error_on_nonzero_exit():
 
     with pytest.raises(ProviderError):
         run_cli(["definitely-not-a-subcommand"])
+
+
+def test_logs_reads_the_vms_console_tail():
+    cli = FakeCli(responses={"logs": "agent starting\n"})
+    provider = AppleContainerProvider(image="sandbox-vm:dev", runner=cli)
+    assert provider.logs("sbx-abc", tail=50) == "agent starting\n"
+    assert cli.calls == [["logs", "-n", "50", "sbx-abc"]]

@@ -90,6 +90,13 @@ class AppleContainerProvider:
             if self.describe(provider_ref) is not None:
                 raise
 
+    def logs(self, provider_ref: str, tail: int = 300) -> str:
+        """The VM's own console: the entrypoint and the agent's log lines.
+
+        Optional: not part of PoolProvider, so a provider without a way to read a
+        machine's console simply lacks it and the dashboard says so."""
+        return self.runner(["logs", "-n", str(tail), provider_ref])
+
     def kill(self, provider_ref: str) -> None:
         self.runner(["kill", "--signal", "KILL", provider_ref])
 

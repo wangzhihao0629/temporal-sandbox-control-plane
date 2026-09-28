@@ -501,3 +501,71 @@ def test_pool_edit_merges_and_validates(demo_client, backend):
         == 400
     )
     assert registry.get_policy("demo")["max"] == 3
+
+
+def test_jobs_show_a_readable_command_with_the_raw_argv_kept(client, backend):
+    registry, _ = backend
+    raw = (
+        "/bin/sh /var/lib/sandbox/artifacts/" + "a" * 64 + "/bin/runner test "
+        "--workspace /private/tmp/sandbox/wf --envelope-uri s3://sandbox-sessions/s/steps/j.json"
+    )
+    registry.put_job("sbx-a", "j1", status="exited", argv_summary=raw)
+    [job] = client.get("/api/jobs").json()
+    assert job["command"] == "runner test --workspace /private/tmp/sandbox/wf"
+    assert job["argv_summary"] == raw
+
+
+def test_a_vm_timeline_holds_only_that_vms_events_in_the_live_feeds_shape(client, backend):
+    registry, _ = backend
+    registry.emit("boot", "vm-agent", "agent ready", vm_id="sbx-a")
+    registry.emit("boot", "vm-agent", "agent ready", vm_id="sbx-b")
+    events = client.get("/api/vms/sbx-a/events").json()
+    assert [e["vm_id"] for e in events] == ["sbx-a"]
+    assert set(events[0]) == {"ts", "type", "actor", "vm_id", "message", "details"}
+
+
+def test_a_provider_without_a_console_says_so(client):
+    r = client.get("/api/vms/sbx-a/log")
+    assert r.status_code == 501 and "cannot read a VM's own console" in r.text
+
+
+def test_storage_lists_this_systems_buckets_and_tables_with_counts(client, backend):
+    registry, store = backend
+    store.put_json("s3://sandbox-sessions/s1/session.json", {"turn": 2})
+    registry.put_job("sbx-a", "j1", status="exited")
+    body = client.get("/api/storage").json()
+    buckets = {b["name"]: b for b in body["buckets"]}
+    tables = {t["name"]: t for t in body["tables"]}
+    assert buckets["sandbox-sessions"]["objects"] == 1 and buckets["sandbox-sessions"]["bytes"] > 0
+    assert tables["sandbox_jobs"]["items"] == 1
+
+
+def test_a_bucket_browses_one_level_at_a_time_and_objects_preview_as_text(client, backend):
+    _, store = backend
+    store.put_json("s3://sandbox-sessions/s1/session.json", {"turn": 2})
+    store.put_json("s3://sandbox-sessions/s1/steps/j.json", {"ok": True})
+    level = client.get("/api/storage/s3", params={"bucket": "sandbox-sessions", "prefix": "s1/"})
+    body = level.json()
+    assert body["prefixes"] == ["s1/steps/"]
+    assert [o["key"] for o in body["objects"]] == ["s1/session.json"]
+    preview = client.get(
+        "/api/storage/s3/object", params={"bucket": "sandbox-sessions", "key": "s1/session.json"}
+    )
+    assert preview.status_code == 200 and '"turn": 2' in preview.text
+
+
+def test_storage_refuses_anything_outside_this_systems_own_buckets_and_tables(client):
+    assert client.get("/api/storage/s3", params={"bucket": "someone-elses"}).status_code == 400
+    assert client.get("/api/storage/dynamodb", params={"table": "users"}).status_code == 400
+    missing = client.get(
+        "/api/storage/s3/object", params={"bucket": "sandbox-out", "key": "nope"}
+    )
+    assert missing.status_code == 404
+
+
+def test_a_registry_table_scans_to_its_items_and_count(client, backend):
+    registry, _ = backend
+    for i in range(3):
+        registry.put_job("sbx-a", f"j{i}", status="exited")
+    body = client.get("/api/storage/dynamodb", params={"table": "sandbox_jobs", "limit": 2}).json()
+    assert body["count"] == 3 and len(body["items"]) == 2
