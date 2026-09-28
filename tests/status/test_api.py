@@ -569,3 +569,19 @@ def test_a_registry_table_scans_to_its_items_and_count(client, backend):
         registry.put_job("sbx-a", f"j{i}", status="exited")
     body = client.get("/api/storage/dynamodb", params={"table": "sandbox_jobs", "limit": 2}).json()
     assert body["count"] == 3 and len(body["items"]) == 2
+
+
+def test_runs_join_jobs_to_their_step_results(client, backend):
+    registry, store = backend
+    runner = "/bin/sh /var/lib/sandbox/artifacts/" + "a" * 64 + "/bin/runner"
+    uri = "s3://sandbox-sessions/s1/steps/s1-test-t1-a1.json"
+    store.put_json(uri, {"ok": True, "kind": "test", "passed": 2, "total": 3,
+                         "failures": [{"test": "t::test_multiply", "message": "boom"}]})
+    registry.put_job(
+        "sbx-a", "s1-test-t1-a1", status="exited", exit_code=0, owner_workflow_id="session-s1",
+        started_at="2026-09-28T04:00:00Z",
+        argv_summary=f"{runner} test --workspace /ws --envelope-uri {uri}",
+    )
+    [run] = client.get("/api/runs").json()
+    assert run["workflow_id"] == "session-s1" and run["level"] == "bad"
+    assert run["steps"][0]["result"]["text"] == "2/3 passed — t::test_multiply"

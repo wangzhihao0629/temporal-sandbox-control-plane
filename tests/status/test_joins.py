@@ -189,3 +189,58 @@ def test_temporal_link():
         == "http://localhost:8233/namespaces/default/workflows/wf-1"
     )
     assert joins.temporal_link("http://ui/", "default", "wf-1", "r1").endswith("/wf-1/r1")
+
+
+RUNNER = "/bin/sh /var/lib/sandbox/artifacts/" + "a" * 64 + "/bin/runner"
+
+
+def _job(job_id, step, status="exited", started="2026-09-28T04:00:00Z", exit_code=0):
+    return {
+        "job_id": job_id,
+        "vm_id": "sbx-a",
+        "status": status,
+        "exit_code": exit_code,
+        "started_at": started,
+        "argv_summary": f"{RUNNER} {step} --workspace /ws --envelope-uri s3://b/{job_id}.json",
+    }
+
+
+def test_a_step_is_parsed_from_its_command_and_job_id():
+    step = joins.step_view(_job("s1-test-t2-a1", "test"))
+    assert (step["step"], step["turn"], step["attempt"]) == ("test", 2, 1)
+    assert step["command"] == "runner test --workspace /ws"
+
+
+def test_a_failing_test_step_is_bad_even_though_it_exited_zero():
+    envelope = {"ok": True, "passed": 2, "total": 3, "failures": [{"test": "t::test_multiply"}]}
+    assert joins.step_result("test", envelope) == {
+        "text": "2/3 passed — t::test_multiply",
+        "level": "bad",
+    }
+    assert joins.step_result("test", {"ok": True, "passed": 3, "total": 3})["level"] == "ok"
+
+
+def test_step_results_read_like_what_the_step_did():
+    assert joins.step_result("run", {"ok": True, "exit_code": 0, "stdout": "Hello\nmore"}) == {
+        "text": "→ Hello",
+        "level": "ok",
+    }
+    assert joins.step_result("lint", {"ok": True, "count": 0, "findings": []})["text"] == (
+        "no findings"
+    )
+    assert joins.step_result("build", {"ok": False, "error": "go build failed"}) == {
+        "text": "go build failed",
+        "level": "bad",
+    }
+
+
+def test_runs_group_steps_by_workflow_in_order_and_carry_the_worst_level():
+    first = joins.step_view(_job("s1-clone-t0-a1", "clone", started="2026-09-28T04:00:01Z"))
+    second = joins.step_view(_job("s1-test-t1-a1", "test", started="2026-09-28T04:00:05Z"))
+    second["result"] = {"text": "2/3 passed", "level": "bad"}
+    other = joins.step_view(_job("g1-run-t0-a1", "run", status="running"))
+    runs = joins.run_views({"session-s1": [second, first], "gobuild-g1": [other]}, lambda w: w)
+    by_id = {r["workflow_id"]: r for r in runs}
+    assert [s["step"] for s in by_id["session-s1"]["steps"]] == ["clone", "test"]
+    assert by_id["session-s1"]["level"] == "bad" and by_id["session-s1"]["kind"] == "session"
+    assert by_id["gobuild-g1"]["status"] == "running"

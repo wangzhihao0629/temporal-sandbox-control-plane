@@ -221,3 +221,104 @@ def sample_series(events: list[dict], minutes: int, now: datetime) -> list[dict]
 
 def tail_text(data: bytes, tail: int) -> str:
     return data[-tail:].decode("utf-8", errors="replace") if tail > 0 else ""
+
+
+_JOB_ID = re.compile(r"-t(\d+)-a(\d+)$")
+_RUNNER_STEP = re.compile(r"^runner (\S+)")
+ENVELOPE_URI = re.compile(r"--envelope-uri (\S+)")
+
+
+def step_view(row: dict) -> dict:
+    """One job as a step of its run: what ran, which turn and attempt, and where."""
+    command = command_view(row.get("argv_summary", ""))
+    runner = _RUNNER_STEP.match(command)
+    ids = _JOB_ID.search(row.get("job_id", ""))
+    return {
+        "job_id": row.get("job_id", ""),
+        "vm_id": row.get("vm_id", ""),
+        "step": runner.group(1) if runner else (command.split(" ", 1)[0] or "?"),
+        "turn": int(ids.group(1)) if ids else None,
+        "attempt": int(ids.group(2)) if ids else None,
+        "command": command,
+        "argv_summary": row.get("argv_summary", ""),
+        "status": row.get("status", ""),
+        "exit_code": row.get("exit_code"),
+        "started_at": row.get("started_at", ""),
+        "duration_seconds": row.get("duration_seconds"),
+        "log_uri": row.get("log_uri", ""),
+        "result": None,
+    }
+
+
+def step_result(step: str, envelope: dict) -> dict:
+    """A step's envelope as one line and a level (ok, warn, bad) for the page.
+
+    A failing test is `bad` even though its job exited 0: failures are data the
+    runner reports, not errors, so the exit code alone would show it green."""
+    if not envelope.get("ok", False):
+        return {"text": envelope.get("error") or "broken", "level": "bad"}
+    e = envelope
+    if step == "test":
+        text = f"{e.get('passed', 0)}/{e.get('total', 0)} passed"
+        failures = e.get("failures") or []
+        if failures:
+            return {"text": f"{text} — {failures[0].get('test', '?')}", "level": "bad"}
+        return {"text": text, "level": "ok"}
+    if step == "lint":
+        findings = e.get("findings") or []
+        if not findings:
+            return {"text": "no findings", "level": "ok"}
+        f = findings[0]
+        return {
+            "text": f"{e.get('count', len(findings))} finding(s) — {f.get('code')} "
+            f"{f.get('file')}:{f.get('line')}",
+            "level": "warn",
+        }
+    if step == "run":
+        first = (e.get("stdout") or "").splitlines()[:1]
+        text = f"→ {first[0]}" if first else "(no output)"
+        return {"text": text, "level": "ok" if e.get("exit_code", 0) == 0 else "bad"}
+    texts = {
+        "clone": lambda: f"from {e.get('source', '?')} at {str(e.get('head', ''))[:7]}",
+        "turn": lambda: f"{e.get('summary', '')} ({e.get('files_changed', 0)} files)",
+        "export": lambda: f"{e.get('commits', 0)} commit(s), {e.get('bytes', 0)} B patch",
+        "fetch": lambda: f"at {str(e.get('head', ''))[:7]}",
+        "edit": lambda: "already applied"
+        if e.get("already_applied")
+        else f"{e.get('file', '')} +{e.get('added', 0)} -{e.get('removed', 0)}",
+        "build": lambda: f"{e.get('go_version', '')} · {e.get('bytes', 0) // 1024} KB "
+        f"in {e.get('seconds', 0)}s",
+    }
+    return {"text": texts[step]() if step in texts else "ok", "level": "ok"}
+
+
+def run_kind(workflow_id: str) -> str:
+    return workflow_id.split("-", 1)[0] if "-" in workflow_id else "run"
+
+
+def run_views(steps_by_workflow: dict[str, list[dict]], link) -> list[dict]:
+    """Jobs grouped into the runs that asked for them, newest run first."""
+    runs = []
+    for workflow_id, steps in steps_by_workflow.items():
+        steps = sorted(steps, key=lambda s: s["started_at"])
+        running = any(s["status"] == "running" for s in steps)
+        levels = [s["result"]["level"] for s in steps if s["result"]]
+        vms: list[str] = []
+        for s in steps:
+            if s["vm_id"] not in vms:
+                vms.append(s["vm_id"])
+        runs.append(
+            {
+                "workflow_id": workflow_id,
+                "workflow_link": link(workflow_id),
+                "kind": run_kind(workflow_id),
+                "status": "running" if running else "done",
+                "level": "bad" if "bad" in levels else "warn" if "warn" in levels else "ok",
+                "started_at": steps[0]["started_at"],
+                "last_step": steps[-1],
+                "vm_ids": vms,
+                "steps": steps,
+            }
+        )
+    runs.sort(key=lambda r: r["last_step"]["started_at"], reverse=True)
+    return runs

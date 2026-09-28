@@ -1,5 +1,6 @@
 """VM activity helpers: heartbeat cadence and the environment a job actually gets."""
 
+from dataclasses import replace
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -101,11 +102,11 @@ def test_log_sync_uploads_only_grown_logs_and_not_more_often_than_the_cadence(
     activities._sync_logs("j1", uri)  # grown, but the cadence has not elapsed
     assert len(activities.store.uploads) == 1
 
-    monkeypatch.setattr("sandbox.vm_agent.activities._LOG_SYNC_EVERY", 0.0)
+    monkeypatch.setattr(activities, "cfg", replace(activities.cfg, log_sync_seconds=0.0))
     activities._sync_logs("j1", uri)  # grown and due
     assert len(activities.store.uploads) == 2
 
-    monkeypatch.setattr("sandbox.vm_agent.activities._LOG_SYNC_EVERY", 1000.0)
+    monkeypatch.setattr(activities, "cfg", replace(activities.cfg, log_sync_seconds=1000.0))
     activities._sync_logs("j1", uri, force=True)  # the final flush ignores the cadence
     assert len(activities.store.uploads) == 3 and "j1" not in activities._log_sync
     assert activities._sync_logs("j1", "")["stdout"] == 14, "no uri: sizes only, no upload"

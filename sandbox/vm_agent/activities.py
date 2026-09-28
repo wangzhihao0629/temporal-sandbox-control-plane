@@ -55,10 +55,6 @@ from sandbox.vm_agent.validation import (
 
 _HEARTBEAT_EVERY = 5.0
 _POLL_EVERY = 1.0
-# Logs are uploaded whole, so a job that runs for hours would otherwise re-send
-# a growing file on every heartbeat. Sync only when the log has grown and at
-# most this often; the final flush after exit is unconditional.
-_LOG_SYNC_EVERY = 15.0
 _VM_IDENTITY_KEYS = (
     "S3_ENDPOINT",
     "AWS_ACCESS_KEY_ID",
@@ -162,7 +158,7 @@ class VmActivities:
         """Report the log sizes and, when due, upload the logs whole.
 
         Whole-file uploads cost the file's current size each time, so on a
-        long job they are rate-limited to `_LOG_SYNC_EVERY` and skipped while
+        long job they are rate-limited to `cfg.log_sync_seconds` and skipped while
         nothing new was written. `force` is for the end of a job: the last
         bytes must land whatever the clock says.
         """
@@ -174,7 +170,7 @@ class VmActivities:
             return sizes
         last_at, last_sizes = self._log_sync.get(job_id, (0.0, {}))
         now = time.monotonic()
-        due = force or (sizes != last_sizes and now - last_at >= _LOG_SYNC_EVERY)
+        due = force or (sizes != last_sizes and now - last_at >= self.cfg.log_sync_seconds)
         if not due:
             return sizes
         for stream in ("stdout", "stderr"):

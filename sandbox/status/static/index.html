@@ -73,6 +73,19 @@
   .row2b { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   @media (max-width: 1100px) { .row2b { grid-template-columns: 1fr; } }
   .crumbs { font-size: 12px; margin-bottom: 6px; }
+  .lvl-ok { color: var(--ok); } .lvl-warn { color: var(--warn); } .lvl-bad { color: var(--bad); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
+         background: var(--muted); vertical-align: middle; }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  .dot.running { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .dot.running { animation: none; } }
+  tr.run { cursor: pointer; } tr.run:hover td { background: var(--chip); }
+  tr.run td:first-child::before { content: "▸"; color: var(--muted); margin-right: 6px; }
+  tr.run.open td:first-child::before { content: "▾"; }
+  tr.steps > td { padding: 0 0 8px 22px; white-space: normal; max-width: none; }
+  tr.steps table td { max-width: 520px; }
+  td.result { white-space: normal; }
   #policy { display: flex; gap: 8px; align-items: center; font-size: 12px; }
   #policy[hidden] { display: none; }
   #policy input { width: 56px; font: inherit; padding: 2px 6px; border-radius: 6px;
@@ -107,10 +120,9 @@
     </section>
   </div>
   <section>
-    <h2>Jobs</h2>
-    <div class="tablewrap"><table id="jobs"><thead><tr>
-      <th>job</th><th>vm</th><th>command</th><th>status</th><th>started</th><th>duration</th>
-      <th>exit</th><th></th>
+    <h2>Runs — each workflow and the steps it ran, newest first (click to expand)</h2>
+    <div class="tablewrap"><table id="runs"><thead><tr>
+      <th>run</th><th>kind</th><th>started</th><th>steps</th><th>VMs</th><th>latest</th>
     </tr></thead><tbody></tbody></table></div>
   </section>
   <section>
@@ -216,15 +228,47 @@
     }).join("") || `<tr><td colspan="8" class="muted">no VMs registered</td></tr>`;
   }
 
-  function renderJobs(jobs) {
-    $("#jobs tbody").innerHTML = jobs.map((j) => {
-      const exit = j.exit_code == null ? "" : `<span class="${j.exit_code === 0 ? "ok" : "bad"}">${esc(j.exit_code)}</span>`;
-      const dur = j.duration_seconds == null ? "" : `${Number(j.duration_seconds).toFixed(1)}s`;
-      const log = j.log_uri ? `<button data-log="${esc(j.job_id)}" data-vm="${esc(j.vm_id)}">log</button>` : "";
-      return `<tr><td title="${esc(j.job_id)}">${esc(short(j.job_id))}</td><td>${esc(j.vm_id)}</td>
-        <td title="${esc(j.argv_summary)}">${esc(j.command)}</td><td>${esc(j.status)}</td>
-        <td>${when(j.started_at)}</td><td>${dur}</td><td>${exit}</td><td>${log}</td></tr>`;
-    }).join("") || `<tr><td colspan="8" class="muted">no jobs yet</td></tr>`;
+  const expanded = new Set();
+  let lastRuns = [];
+
+  function stepLabel(s) {
+    return s.turn ? `${s.step} <span class="muted">t${s.turn}${s.attempt > 1 ? ` · attempt ${s.attempt}` : ""}</span>`
+                  : `${esc(s.step)}${s.attempt > 1 ? ` <span class="muted">attempt ${s.attempt}</span>` : ""}`;
+  }
+
+  function stepStatus(s) {
+    if (s.status === "running") return `<span class="dot running"></span>running`;
+    const lvl = s.result ? s.result.level : (s.exit_code === 0 ? "ok" : s.exit_code == null ? "" : "bad");
+    return `<span class="dot ${lvl}"></span>${esc(s.status)}${s.exit_code != null && s.exit_code !== 0 ? ` (${s.exit_code})` : ""}`;
+  }
+
+  function renderRuns(runs) {
+    lastRuns = runs;
+    $("#runs tbody").innerHTML = runs.map((r) => {
+      const open = expanded.has(r.workflow_id);
+      const dot = r.status === "running" ? "running" : r.level;
+      const latest = r.last_step.result
+        ? `<span class="lvl-${r.last_step.result.level}">${esc(r.last_step.step)}: ${esc(r.last_step.result.text)}</span>`
+        : `<span class="muted">${esc(r.last_step.step)}: ${esc(r.last_step.status)}</span>`;
+      const head = `<tr class="run${open ? " open" : ""}" data-run="${esc(r.workflow_id)}">
+        <td><span class="dot ${dot}"></span><a href="${esc(r.workflow_link)}" target="_blank" title="open in Temporal">${esc(r.workflow_id)}</a></td>
+        <td>${esc(r.kind)}</td><td>${when(r.started_at)}</td><td>${r.steps.length}</td>
+        <td>${esc(r.vm_ids.join(", "))}</td><td class="result">${latest}</td></tr>`;
+      if (!open) return head;
+      const rows = r.steps.map((s) => {
+        const dur = s.duration_seconds == null ? "" : `${Number(s.duration_seconds).toFixed(1)}s`;
+        const result = s.result ? `<span class="lvl-${s.result.level}">${esc(s.result.text)}</span>` : "";
+        const log = s.log_uri ? `<button data-log="${esc(s.job_id)}" data-vm="${esc(s.vm_id)}">log</button>` : "";
+        return `<tr><td>${stepLabel(s)}</td><td>${esc(s.vm_id)}</td><td>${stepStatus(s)}</td>
+          <td>${when(s.started_at)}</td><td>${dur}</td><td class="result" title="${esc(s.argv_summary)}">${result}</td><td>${log}</td></tr>`;
+      }).join("");
+      return head + `<tr class="steps"><td colspan="6"><table><thead><tr><th>step</th><th>vm</th><th>status</th>
+        <th>started</th><th>duration</th><th>result</th><th></th></tr></thead><tbody>${rows}</tbody></table></td></tr>`;
+    }).join("") || `<tr><td colspan="6" class="muted">no runs yet — try make demo or make gobuild</td></tr>`;
+  }
+
+  function jobRunning(job) {
+    return lastRuns.some((r) => r.steps.some((s) => s.job_id === job && s.status === "running"));
   }
 
   function renderSessions(sessions) {
@@ -265,6 +309,7 @@
   }
 
   function showDrawer(title, { html, text, streams = false }) {
+    if (!streams) drawer.live = false;
     $("#drawer-title").textContent = title;
     $("#drawer-stderr").hidden = !streams;
     $("#drawer-body").hidden = html !== undefined;
@@ -330,8 +375,20 @@
       <pre style="max-height:none">${esc(JSON.stringify(res.items, null, 2))}</pre>` });
   }
 
+  async function refreshLog() {
+    const { vm, job, stream } = drawer;
+    const pre = $("#drawer-body");
+    const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
+    const body = await text(`/api/jobs/${encodeURIComponent(vm)}/${encodeURIComponent(job)}/log?stream=${stream}&tail=16384`);
+    if (drawer.job !== job) return;
+    pre.textContent = body;
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+    drawer.live = jobRunning(job);
+    $("#drawer-title").textContent = `${job} · ${stream}${drawer.live ? " · live" : ""}`;
+  }
+
   async function openLog(vm, job, stream) {
-    drawer = { vm, job, stream };
+    drawer = { vm, job, stream, live: jobRunning(job) };
     $("#drawer-stderr").textContent = stream === "stdout" ? "stderr" : "stdout";
     showDrawer(`${job} · ${stream}`, { text: "", streams: true });
     try {
@@ -342,13 +399,19 @@
   }
 
   document.addEventListener("click", async (ev) => {
+    const runRow = ev.target.closest("tr.run");
+    if (runRow && !ev.target.closest("a")) {
+      const id = runRow.dataset.run;
+      expanded.has(id) ? expanded.delete(id) : expanded.add(id);
+      return renderRuns(lastRuns);
+    }
     const b = ev.target.closest("button"); if (!b) return;
     if (b.dataset.log) return openLog(b.dataset.vm, b.dataset.log, "stdout");
     if (b.dataset.vmOpen) return openVm(b.dataset.vmOpen);
     if (b.dataset.key) return openObject(b.dataset.bucket, b.dataset.key);
     if (b.dataset.bucket) return openBucket(b.dataset.bucket, b.dataset.prefix ?? "");
     if (b.dataset.table) return openTable(b.dataset.table);
-    if (b.id === "drawer-close") return $("#drawer").classList.remove("open");
+    if (b.id === "drawer-close") { drawer.live = false; return $("#drawer").classList.remove("open"); }
     if (b.id === "drawer-stderr") return openLog(drawer.vm, drawer.job, drawer.stream === "stdout" ? "stderr" : "stdout");
     if (b.dataset.chaos) {
       if (!confirm(`${b.dataset.chaos} ${b.dataset.vm}?`)) return;
@@ -373,10 +436,11 @@
     if (refreshing) return;
     refreshing = true;
     try {
-      const [vms, jobs, sessions, samples] = await Promise.allSettled([
-        json("/api/vms"), json("/api/jobs?limit=30"), json("/api/sessions?limit=15"), json("/api/samples?minutes=15")]);
+      const [vms, runs, sessions, samples] = await Promise.allSettled([
+        json("/api/vms"), json("/api/runs?limit=15"), json("/api/sessions?limit=15"), json("/api/samples?minutes=15")]);
       if (vms.status === "fulfilled") renderVms(vms.value); else console.warn(vms.reason);
-      if (jobs.status === "fulfilled") renderJobs(jobs.value); else console.warn(jobs.reason);
+      if (runs.status === "fulfilled") renderRuns(runs.value); else console.warn(runs.reason);
+      if (drawer.live && $("#drawer").classList.contains("open")) refreshLog();
       if (sessions.status === "fulfilled") renderSessions(sessions.value); else console.warn(sessions.reason);
       if (samples.status === "fulfilled") renderSpark(samples.value); else console.warn(samples.reason);
     } finally {

@@ -49,6 +49,11 @@ class AgentConfig:
     run_as_user: str | None
     heartbeat_seconds: float
     graceful_shutdown_seconds: float = 30.0
+    # Logs are uploaded whole, so this bounds how often a growing log is re-sent:
+    # low enough to watch a job's log live, high enough that a job running for
+    # hours doesn't re-upload its whole log on every heartbeat. The final flush
+    # after a job exits is unconditional.
+    log_sync_seconds: float = 5.0
     labels: dict[str, str] = field(default_factory=dict)
     prefetch: list[tuple[str, str]] = field(default_factory=list)
     exec_policy: ExecPolicy = DEMO_POLICY
@@ -72,6 +77,7 @@ class AgentConfig:
             graceful_shutdown_seconds=float(
                 env.get("SANDBOX_GRACEFUL_SHUTDOWN_SECONDS", "30")
             ),
+            log_sync_seconds=float(env.get("SANDBOX_LOG_SYNC_SECONDS", "5")),
             labels=_parse_labels(env.get("SANDBOX_LABELS", "")),
             prefetch=_parse_prefetch(env.get("PREFETCH_ARTIFACTS", "")),
         )

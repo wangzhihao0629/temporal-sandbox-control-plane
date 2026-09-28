@@ -205,6 +205,54 @@ async def leases(deps: Deps) -> list[dict]:
     ]
 
 
+async def runs(deps: Deps, limit: int) -> list[dict]:
+    """Recent jobs grouped by the workflow that ran them, each step with its result.
+
+    A step's result is its envelope in the object store, which never changes once
+    the job has exited, so `deps._cache["envelopes"]` fetches each one once; a
+    step still running has no result yet and is fetched again on a later poll.
+    """
+    rows = await asyncio.to_thread(deps.registry.list_jobs, None, 500)
+    cache: dict[str, dict | None] = deps._cache.setdefault("envelopes", {})
+
+    async def _envelope(uri: str) -> dict | None:
+        try:
+            return await asyncio.to_thread(deps.store.get_json, uri)
+        except (FileNotFoundError, json.JSONDecodeError, ValueError):
+            return None
+
+    by_workflow: dict[str, list[dict]] = {}
+    pending: dict[str, dict] = {}
+    seen: set[str] = set()
+    for row in rows:
+        workflow_id = row.get("owner_workflow_id") or ""
+        if not workflow_id:
+            continue
+        step = joins.step_view(row)
+        found = joins.ENVELOPE_URI.search(row.get("argv_summary", ""))
+        if found and step["status"] != "running":
+            uri = found.group(1)
+            seen.add(uri)
+            if uri in cache:
+                if cache[uri] is not None:
+                    step["result"] = joins.step_result(step["step"], cache[uri])
+            else:
+                pending[uri] = step
+        by_workflow.setdefault(workflow_id, []).append(step)
+    fetched = await asyncio.gather(*(_envelope(uri) for uri in pending))
+    for (uri, step), envelope in zip(pending.items(), fetched, strict=True):
+        cache[uri] = envelope
+        if envelope is not None:
+            step["result"] = joins.step_result(step["step"], envelope)
+    for uri in [u for u in cache if u not in seen]:
+        del cache[uri]
+
+    def link(workflow_id: str) -> str:
+        return joins.temporal_link(deps.temporal_ui, deps.temporal_namespace, workflow_id, "")
+
+    return joins.run_views(by_workflow, link)[:limit]
+
+
 async def sessions(deps: Deps, limit: int) -> list[dict]:
     """Session views from `summary.json` objects, parsed once per URI and then cached.
 
@@ -425,6 +473,10 @@ def create_app(deps: Deps) -> FastAPI:
     def _known_bucket(bucket: str) -> None:
         if bucket not in BUCKETS:
             raise HTTPException(400, f"not one of this system's buckets: {bucket}")
+
+    @app.get("/api/runs")
+    async def api_runs(limit: int = Query(15, ge=1, le=100)):
+        return await runs(deps, limit)
 
     @app.get("/api/sessions")
     async def api_sessions(limit: int = Query(20, ge=1, le=200)):

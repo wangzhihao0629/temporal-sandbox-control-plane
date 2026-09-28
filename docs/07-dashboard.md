@@ -10,7 +10,7 @@ three ways the page keeps showing something useful when a dependency is down.
 
 `sandbox/status/static/index.html` is one page, plain JavaScript, no build
 step: on load it fetches `/api/config`, an initial `/api/fleet`, and then
-polls `/api/vms`, `/api/jobs?limit=30`, `/api/sessions?limit=15`, and
+polls `/api/vms`, `/api/runs?limit=15`, `/api/sessions?limit=15`, and
 `/api/samples?minutes=15` every two seconds through one `refresh()` call. The
 header shows the pool, provider, policy, and whether counts came from a
 sample or were counted from rows (`renderCounters`); the counters row shows
@@ -18,11 +18,12 @@ Total, Idle, Leased, Booting, Draining, Dead, and Pending. The VMs table adds
 heartbeat age, provider state, agent version, the current job, and the owner
 workflow's id linked to the Temporal UI with its live status next to it. The
 events panel prepends each SSE frame, capped at 200 rows in the DOM, except
-`fleet_sample`, which only drives the counters and sparkline. Jobs shows the
-last 30 job rows with a log button per row, and the command as
-`runner test --workspace ...` (`joins.command_view`), not the artifact path; every
-runner step ends its log with its result, via `envelopes.describe`, so a test
-step's log names the failing tests. Clicking a VM opens its timeline, the
+`fleet_sample`, which only drives the counters and sparkline. Runs groups jobs
+by the workflow that ran them (`joins.run_views`) and expands into its steps
+in order, each with its result read from its envelope (`joins.step_result`):
+a failing test shows red although its job exited 0. An open log refreshes
+while its job runs; the VM uploads it every `log_sync_seconds`. Every step's
+log also ends with its result (`envelopes.describe`). Clicking a VM opens its timeline, the
 commands it ran, and its own console (`/api/vms/{vm_id}/log`, when the
 provider has `logs`). Storage lists the four buckets and four tables with
 counts, browsable down to one object's text or one table's items. Sessions shows recent
@@ -49,6 +50,7 @@ own process (`Procfile`'s `status` line, `make status` locally).
 | `GET /api/fleet` | `joins.fleet_view`: counts, policy, and whether they came from a sample |
 | `GET /api/vms` | every registry row joined with provider state, current job, and owner status |
 | `GET /api/leases` | leased rows only, with age and owner status |
+| `GET /api/runs?limit=` | jobs grouped by workflow, each step with its result |
 | `GET /api/jobs?vm_id=&limit=` | recent job rows, filterable by VM |
 | `GET /api/jobs/{vm_id}/{job_id}/log` | the tail of `stdout.log` or `stderr.log` from the object store |
 | `GET /api/sessions?limit=` | `summary.json` objects under `s3://sandbox-out/`, newest first |
@@ -117,7 +119,8 @@ bad or vanished summary drops out of the list instead of breaking it.
 - `sandbox/status/api.py` — `Deps`, `create_app`, `event_stream`,
   `TemporalOwnerStatus`, `_instances`, `_demo_only`.
 - `sandbox/status/joins.py` — `fleet_view`, `vm_view`, `lease_view`,
-  `session_view`, `sample_series`, `event_view`, `command_view`.
+  `session_view`, `sample_series`, `event_view`, `command_view`,
+  `step_view`, `step_result`, `run_views`.
 - `sandbox/status/static/index.html` — the page, its polling loop, and the
   SSE handlers.
 - `sandbox/status/__init__.py` — what the process serves, in one paragraph.
