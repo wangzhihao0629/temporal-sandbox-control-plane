@@ -173,7 +173,7 @@ standalone page with the same diagrams in more detail — open it in a browser.
   checks for `container` and `temporal` and says what to install if either is
   missing.
 - About 2 GB of disk for the VM image, and network access for the first
-  `make image` (it pulls Ubuntu) and for `make gobuild` (it clones from GitHub).
+  `make image` (it pulls Ubuntu) and for `make demo-gobuild` (it clones from GitHub).
 
 ### macOS firewall
 
@@ -209,7 +209,7 @@ make workers     # starts the manager, orchestrator, and status API — and keep
 it running and use a **second terminal** for the rest:
 
 ```sh
-make demo        # waits for two VMs to boot, runs a smoke check, then one coding session
+make demo-session  # waits for two VMs to boot, runs a smoke check, then one coding session
 ```
 
 The first run takes a minute or two while the reconciler boots the pool's
@@ -227,7 +227,7 @@ make session SCENARIO=multiply-with-bug   # a session with a fix loop
 make chaos-kill VM=<vm-id>                # kill a leased VM mid-turn
 make chaos-stop VM=<vm-id>                # drain a leased VM (SIGTERM)
 make hold SECONDS=120                     # hold a lease, then orphan it
-make gobuild                              # clone, edit, build, run, snapshot, restore
+make demo-gobuild                         # clone, edit, build, run, snapshot, restore
 make show                                 # raw registry/fleet snapshot
 make check-sudoers                        # what the VM's sudo rule allows and refuses
 make check-network                        # what a job may connect to

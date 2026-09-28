@@ -56,12 +56,12 @@ check-network:
 artifact:
 	$(UV) run python -m sandbox.runner.package
 
-.PHONY: demo session gobuild chaos-kill chaos-stop chaos-delete policy reconcile hold terminate
+.PHONY: demo-session demo-gobuild session chaos-kill chaos-stop chaos-delete policy reconcile hold terminate
 
 SECONDS ?= 120
 
-demo:
-	SCENARIO=$(SCENARIO) ./scripts/demo.sh
+demo-session:
+	SCENARIO=$(SCENARIO) ./scripts/demo-session.sh
 
 session:
 	$(UV) run python -m sandbox.cli.session \
@@ -72,7 +72,7 @@ session:
 	  $(if $(TURN_TIMEOUT),--turn-timeout $(TURN_TIMEOUT)) \
 	  $(if $(STEP_TIMEOUT),--step-timeout $(STEP_TIMEOUT))
 
-gobuild:
+demo-gobuild:
 	$(UV) run python -m sandbox.cli.gobuild $(foreach a,$(ARGS),--arg=$(a))
 
 chaos-kill:

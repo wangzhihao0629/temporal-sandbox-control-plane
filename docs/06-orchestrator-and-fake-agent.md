@@ -142,7 +142,7 @@ clone, lint, test, the loop, and export are unchanged.
 - `sandbox/orchestrator/steps.py` — `SessionUris`, `run_step`, `job_id`, the
   `ExecSpec` builders.
 - `sandbox/orchestrator/activities.py` — `read_envelope`, `publish_summary`.
-- `sandbox/cli/session.py` — the `make session`/`make demo` entry.
+- `sandbox/cli/session.py` — the `make session`/`make demo-session` entry.
 - `sandbox/contract/errors.py` — `SandboxError`, `LeaseLost`, `ExecFailed`.
 - `sandbox/runner/cli.py` — the nine subcommands, the one non-zero exit code.
 - `sandbox/runner/session.py` — `clone`, `run_turn`, `export`, `SessionState`.

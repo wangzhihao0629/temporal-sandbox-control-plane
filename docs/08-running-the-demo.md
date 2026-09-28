@@ -67,7 +67,7 @@ already walked through. Code path: `sandbox/cli/smoke.py`,
 
 ### 3. A session with a fix loop
 
-`make demo` (packages the artifact on a first run) or
+`make demo-session` (packages the artifact on a first run) or
 `make session SCENARIO=multiply-with-bug`. Turn one adds `multiply` with `+`;
 the test step reports one failure; turn two quotes it and fixes the operator.
 Dashboard: `[think]`/`[tool]`/`[feedback]` lines in the log tail while it runs;
@@ -204,7 +204,7 @@ threshold plus half a second before asserting a pass acted on it.
 - `Makefile` — every target this chapter names.
 - `scripts/up.sh` — the boot sequence and the `.env` it writes.
 - `scripts/down.sh` — what a teardown deletes and what it leaves alone.
-- `scripts/demo.sh` — the cold-start wait loop behind `make demo`.
+- `scripts/demo-session.sh` — the cold-start wait loop behind `make demo-session`.
 - `scripts/build-image.sh` — the locked export `make image` builds from.
 - `Procfile` — the three processes `make workers` starts.
 - `sandbox/bootstrap.py` — the default pool policy `make up` seeds.

@@ -149,7 +149,7 @@ security group, is handed the same `NetworkPolicy` instead of nftables.
 
 ## Try it
 
-With the stack up (chapter 08), `make gobuild` printed:
+With the stack up (chapter 08), `make demo-gobuild` printed:
 
 ```
 built:   sbx-07dce6e5  head 7f05d217867b  go1.22.2  2222218 bytes
@@ -160,7 +160,7 @@ ran:     Hello, Temporal sandbox!
 match:   yes
 ```
 
-`make gobuild ARGS=-r` passes `-r` through to the program, and both VMs
+`make demo-gobuild ARGS=-r` passes `-r` through to the program, and both VMs
 printed `olleH, xobdnas laropmeT!`. Pointing the demo at a host outside the
 allowlist fails in `fetch` with git's own "unable to access" error.
 `make check-network` runs twelve checks on a real VM: `agent` reaches

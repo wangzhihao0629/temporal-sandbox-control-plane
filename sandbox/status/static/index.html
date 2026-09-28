@@ -264,7 +264,7 @@
       }).join("");
       return head + `<tr class="steps"><td colspan="6"><table><thead><tr><th>step</th><th>vm</th><th>status</th>
         <th>started</th><th>duration</th><th>result</th><th></th></tr></thead><tbody>${rows}</tbody></table></td></tr>`;
-    }).join("") || `<tr><td colspan="6" class="muted">no runs yet — try make demo or make gobuild</td></tr>`;
+    }).join("") || `<tr><td colspan="6" class="muted">no runs yet — try make demo-session or make demo-gobuild</td></tr>`;
   }
 
   function jobRunning(job) {
